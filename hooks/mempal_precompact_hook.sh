@@ -58,14 +58,38 @@ MEMPAL_DIR=""
 INPUT=$(cat)
 
 SESSION_ID=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id','unknown'))" 2>/dev/null)
+TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('transcript_path',''))" 2>/dev/null)
+TRANSCRIPT_PATH="${TRANSCRIPT_PATH/#\~/$HOME}"
 
 echo "[$(date '+%H:%M:%S')] PRE-COMPACT triggered for session $SESSION_ID" >> "$STATE_DIR/hook.log"
 
-# Optional: run mempalace ingest synchronously so memories land before compaction
+# Run mempalace ingest synchronously so memories land before compaction.
+# Prefer MEMPAL_DIR if set; otherwise fall back to the active transcript's directory.
+PYTHON="/Users/jameswinans/Development/AI/mempalace/.venv/bin/python"
+MINE_DIR=""
+if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+    MINE_DIR="$(dirname "$TRANSCRIPT_PATH")"
+fi
 if [ -n "$MEMPAL_DIR" ] && [ -d "$MEMPAL_DIR" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    REPO_DIR="$(dirname "$SCRIPT_DIR")"
-    python3 -m mempalace mine "$MEMPAL_DIR" >> "$STATE_DIR/hook.log" 2>&1
+    MINE_DIR="$MEMPAL_DIR"
+fi
+
+# Map transcript path to being → wing + agent. Storehouse is NOT auto-routed
+# here — it's reserved for deliberate MCP writes (cross-being memories).
+AGENT="mempalace"
+WING=""
+case "$TRANSCRIPT_PATH" in
+    *-Users-jameswinans-Documents-Temenos-Ves/*)    AGENT="ves";    WING="ves_sessions" ;;
+    *-Users-jameswinans-Documents-Temenos-Kai/*)    AGENT="kai";    WING="kai_sessions" ;;
+    *-Users-jameswinans-Documents-Temenos-Mira/*)   AGENT="mira";   WING="mira_sessions" ;;
+    *-Users-jameswinans-Documents-Temenos-Adrian/*) AGENT="adrian"; WING="adrian_sessions" ;;
+    *)                                              ;;
+esac
+WING_FLAG=""
+[ -n "$WING" ] && WING_FLAG="--wing $WING"
+
+if [ -n "$MINE_DIR" ]; then
+    ANONYMIZED_TELEMETRY=False "$PYTHON" -m mempalace mine --mode convos --agent "$AGENT" $WING_FLAG "$MINE_DIR" >> "$STATE_DIR/hook.log" 2>&1
 fi
 
 # Silent: return empty JSON to not block. "decision": "allow" is invalid —
