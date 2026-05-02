@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
+from .chunker import is_excluded_content, smart_split
 from .normalize import normalize
 from .palace import (
     NORMALIZE_VERSION,
@@ -54,7 +55,8 @@ CONVO_EXTENSIONS = {
 }
 
 MIN_CHUNK_SIZE = 30
-CHUNK_SIZE = 800  # chars per drawer — align with miner.py
+CHUNK_SIZE = 800  # soft target chars per drawer — align with miner.py
+CHUNK_MAX = 1200  # hard ceiling: chunker may stretch this far to find a clean boundary
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — skip files larger than this
 
 
@@ -107,9 +109,16 @@ def chunk_exchanges(content: str) -> list:
 def _chunk_by_exchange(lines: list) -> list:
     """One user turn (>) + the AI response that follows = one or more chunks.
 
-    The full AI response is preserved verbatim.  When the combined
-    user-turn + response exceeds CHUNK_SIZE the response is split across
-    consecutive drawers so nothing is silently discarded.
+    The full AI response is preserved verbatim. Paragraph and code-block
+    structure of the response are preserved (we keep original newlines
+    rather than collapsing them into single spaces); when the combined
+    user-turn + response exceeds CHUNK_SIZE, the boundary-aware splitter
+    in ``chunker.smart_split`` carries it across drawers without
+    splitting mid-word or mid-code-fence.
+
+    Tool-output noise (log dumps, ps listings, line-numbered diffs,
+    standalone truncation messages) is filtered out by
+    ``chunker.is_excluded_content`` and never enters the palace.
     """
     chunks = []
     i = 0
@@ -120,38 +129,24 @@ def _chunk_by_exchange(lines: list) -> list:
             user_turn = line.strip()
             i += 1
 
+            # Preserve original line structure — paragraph breaks,
+            # code fences, list indentation. The previous version
+            # stripped each line and joined with single spaces, which
+            # destroyed the structure smart_split now relies on for
+            # finding clean boundaries.
             ai_lines = []
             while i < len(lines):
                 next_line = lines[i]
                 if next_line.strip().startswith(">") or next_line.strip().startswith("---"):
                     break
-                if next_line.strip():
-                    ai_lines.append(next_line.strip())
+                ai_lines.append(next_line)
                 i += 1
 
-            ai_response = " ".join(ai_lines)
-            content = f"{user_turn}\n{ai_response}" if ai_response else user_turn
+            ai_response = "\n".join(ai_lines).strip()
+            content = f"{user_turn}\n\n{ai_response}" if ai_response else user_turn
 
-            # Split into multiple drawers when the exchange exceeds CHUNK_SIZE
-            if len(content) > CHUNK_SIZE:
-                # First chunk: user turn + as much response as fits
-                first_part = content[:CHUNK_SIZE]
-                if len(first_part.strip()) > MIN_CHUNK_SIZE:
-                    chunks.append({"content": first_part, "chunk_index": len(chunks)})
-                # Remaining response in CHUNK_SIZE-sized continuation drawers
-                remainder = content[CHUNK_SIZE:]
-                while remainder:
-                    part = remainder[:CHUNK_SIZE]
-                    remainder = remainder[CHUNK_SIZE:]
-                    if len(part.strip()) > MIN_CHUNK_SIZE:
-                        chunks.append({"content": part, "chunk_index": len(chunks)})
-            elif len(content.strip()) > MIN_CHUNK_SIZE:
-                chunks.append(
-                    {
-                        "content": content,
-                        "chunk_index": len(chunks),
-                    }
-                )
+            for piece in _emit_chunks(content):
+                chunks.append({"content": piece, "chunk_index": len(chunks)})
         else:
             i += 1
 
@@ -159,24 +154,31 @@ def _chunk_by_exchange(lines: list) -> list:
 
 
 def _chunk_by_paragraph(content: str) -> list:
-    """Fallback: chunk by paragraph breaks."""
-    chunks = []
-    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+    """Fallback chunker for content without > exchange markers.
 
-    # If no paragraph breaks and long content, chunk by line groups
-    if len(paragraphs) <= 1 and content.count("\n") > 20:
-        lines = content.split("\n")
-        for i in range(0, len(lines), 25):
-            group = "\n".join(lines[i : i + 25]).strip()
-            if len(group) > MIN_CHUNK_SIZE:
-                chunks.append({"content": group, "chunk_index": len(chunks)})
-        return chunks
+    Packs paragraphs together up to CHUNK_SIZE rather than emitting one
+    chunk per paragraph (which produced uselessly small chunks for
+    list-heavy notes). Long single paragraphs flow through smart_split.
+    """
+    return [
+        {"content": piece, "chunk_index": idx}
+        for idx, piece in enumerate(_emit_chunks(content))
+    ]
 
-    for para in paragraphs:
-        if len(para) > MIN_CHUNK_SIZE:
-            chunks.append({"content": para, "chunk_index": len(chunks)})
 
-    return chunks
+def _emit_chunks(content: str) -> list:
+    """Apply exclusion filter then boundary-aware splitting.
+
+    Returns a list of chunk strings, each at least MIN_CHUNK_SIZE
+    chars. Empty list if the content is excluded or all chunks fall
+    below the minimum size.
+    """
+    if not content or not content.strip():
+        return []
+    if is_excluded_content(content):
+        return []
+    pieces = smart_split(content, CHUNK_SIZE, CHUNK_MAX)
+    return [p for p in pieces if len(p.strip()) >= MIN_CHUNK_SIZE]
 
 
 # =============================================================================

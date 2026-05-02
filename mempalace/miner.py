@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
+from .chunker import is_excluded_content, smart_split
 from .palace import (
     NORMALIZE_VERSION,
     SKIP_DIRS,
@@ -59,8 +60,9 @@ SKIP_FILENAMES = {
     "package-lock.json",
 }
 
-CHUNK_SIZE = 800  # chars per drawer
-CHUNK_OVERLAP = 100  # overlap between chunks
+CHUNK_SIZE = 800  # soft target chars per drawer
+CHUNK_MAX = 1200  # hard ceiling: chunker may stretch this far to find a clean boundary
+CHUNK_OVERLAP = 100  # overlap between chunks (legacy; smart_split does not use overlap)
 MIN_CHUNK_SIZE = 50  # skip tiny chunks
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB — skip files larger than this
 
@@ -348,45 +350,31 @@ def detect_room(filepath: Path, content: str, rooms: list, project_path: Path) -
 
 def chunk_text(content: str, source_file: str) -> list:
     """
-    Split content into drawer-sized chunks.
-    Tries to split on paragraph/line boundaries.
-    Returns list of {"content": str, "chunk_index": int}
+    Split content into drawer-sized chunks using the meaning-aware
+    chunker (paragraph/sentence/word boundary search, code-block
+    atomicity, tool-output exclusion).
+
+    Returns a list of ``{"content": str, "chunk_index": int}``. Empty
+    if the content is empty, dominated by tool-output noise (logs, ps,
+    diffs, truncation messages), or all candidate chunks fall below
+    MIN_CHUNK_SIZE.
+
+    The legacy CHUNK_OVERLAP parameter is no longer used: smart_split
+    aligns to semantic boundaries, which obviates the sliding-window
+    overlap that the old fixed-width chunker needed to mitigate its
+    mid-word cuts.
     """
-    # Clean up
-    content = content.strip()
-    if not content:
+    if not content or not content.strip():
+        return []
+    if is_excluded_content(content):
         return []
 
-    chunks = []
-    start = 0
-    chunk_index = 0
-
-    while start < len(content):
-        end = min(start + CHUNK_SIZE, len(content))
-
-        # Try to break at paragraph boundary
-        if end < len(content):
-            newline_pos = content.rfind("\n\n", start, end)
-            if newline_pos > start + CHUNK_SIZE // 2:
-                end = newline_pos
-            else:
-                newline_pos = content.rfind("\n", start, end)
-                if newline_pos > start + CHUNK_SIZE // 2:
-                    end = newline_pos
-
-        chunk = content[start:end].strip()
-        if len(chunk) >= MIN_CHUNK_SIZE:
-            chunks.append(
-                {
-                    "content": chunk,
-                    "chunk_index": chunk_index,
-                }
-            )
-            chunk_index += 1
-
-        start = end - CHUNK_OVERLAP if end < len(content) else end
-
-    return chunks
+    pieces = smart_split(content, CHUNK_SIZE, CHUNK_MAX)
+    return [
+        {"content": piece, "chunk_index": idx}
+        for idx, piece in enumerate(pieces)
+        if len(piece.strip()) >= MIN_CHUNK_SIZE
+    ]
 
 
 # =============================================================================
