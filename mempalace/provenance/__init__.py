@@ -107,6 +107,35 @@ _RELATION_ONLY_RE = re.compile(
 )
 
 
+# Pass 3: Capitalized bare-relation as subject — "Dad said X", "Mom told me Y".
+# Added 2026-05-11 D2 calibration: case "Dad always told me 'never trust a
+# smiling investor'" was missed by Pass 1 (no possessive prefix) and Pass 2
+# (which also requires the possessive). Capitalize-only constraint keeps the
+# false-positive rate manageable — "dad" lowercase mid-sentence ("old dad")
+# is filtered out by the classifier rather than the regex.
+_BARE_RELATIONS = (
+    "Dad", "Mom", "Father", "Mother", "Mama", "Papa",
+    "Grandma", "Grandpa", "Grandmother", "Grandfather",
+    "Roshi", "Teacher",
+)
+_BARE_RELATIONS_GROUP = "(" + "|".join(_BARE_RELATIONS) + ")"
+_BARE_RELATION_ATTRIBUTION_QUOTE_RE = re.compile(
+    r"\b"
+    + _BARE_RELATIONS_GROUP
+    + r"\b"
+    + r"\s+(?:always\s+|often\s+)?"
+    + _ATTRIBUTION_VERBS
+    + r"\s*[:,]?\s*"
+    + _QUOTE_OPEN
+    + r"(.+?)"
+    + _QUOTE_CLOSE,
+    # NOT case-insensitive — Pass 3 specifically targets the capitalized
+    # subject-as-relation pattern. Lowercase "dad" mid-sentence is left
+    # to the classifier.
+    re.DOTALL,
+)
+
+
 HEURISTIC_CONFIDENCE_QUOTE = 0.75
 """Confidence floor for relation + quote matches (highest-signal heuristic)."""
 
@@ -262,6 +291,31 @@ def extract_candidates(text: str) -> list[ProvenanceCandidate]:
                 quote=None,
                 position=m.start(),
                 confidence_floor=HEURISTIC_CONFIDENCE_RELATION_ONLY,
+            )
+        )
+
+    # Pass 3: Capitalized bare-relation as subject + attribution + quote.
+    # "Dad always told me 'never trust a smiling investor'" — case Pass-1
+    # missed because there's no possessive prefix. Skip overlaps with
+    # Pass-1 / Pass-2 matches at the same position.
+    existing_positions = {c.position for c in candidates}
+    for m in _BARE_RELATION_ATTRIBUTION_QUOTE_RE.finditer(text):
+        if any(
+            abs(m.start() - p) < _PASS1_DEDUPE_WINDOW_CHARS for p in existing_positions
+        ):
+            continue
+        relation = m.group(1).lower()
+        quote = m.group(2).strip() if m.group(2) is not None else None
+        candidates.append(
+            ProvenanceCandidate(
+                text=m.group(0),
+                person_hint=relation,
+                relation_hint=relation,
+                quote=quote,
+                position=m.start(),
+                # Same floor as Pass 1 — capitalize-only + attribution +
+                # quote is high-signal even without possessive prefix.
+                confidence_floor=HEURISTIC_CONFIDENCE_QUOTE,
             )
         )
 
