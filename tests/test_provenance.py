@@ -124,6 +124,51 @@ def test_extract_pass2_word_boundary_avoids_fatherland():
 
 
 # ---------------------------------------------------------------------------
+# extract_candidates — Pass 3 (Capitalized bare-relation as subject)
+# ---------------------------------------------------------------------------
+
+def test_extract_pass3_dad_always_told_me():
+    """Calibration fixture #14: "Dad always told me 'never trust a
+    smiling investor'". Pass-1 misses (no possessive prefix); Pass-2
+    misses (also requires possessive). Pass-3 catches capitalized-
+    bare-relation + attribution + quote."""
+
+    text = "Dad always told me 'never trust a smiling investor'"
+    candidates = extract_candidates(text)
+    assert len(candidates) == 1
+    c = candidates[0]
+    assert c.person_hint == "dad"
+    assert c.relation_hint == "dad"
+    assert c.quote == "never trust a smiling investor"
+    assert c.confidence_floor == HEURISTIC_CONFIDENCE_QUOTE
+
+
+def test_extract_pass3_mom_used_to_say():
+    text = "Mom used to say 'be kind'"
+    candidates = extract_candidates(text)
+    assert len(candidates) == 1
+    assert candidates[0].person_hint == "mom"
+    assert candidates[0].quote == "be kind"
+
+
+def test_extract_pass3_roshi_said():
+    text = "Roshi taught me: 'sit with what is arising'"
+    candidates = extract_candidates(text)
+    assert len(candidates) == 1
+    assert candidates[0].person_hint == "roshi"
+
+
+def test_extract_pass3_requires_capitalization():
+    """Lowercase "dad" mid-sentence without possessive prefix must NOT
+    match Pass-3. The capitalize-only constraint keeps false-positives
+    manageable; the D2 classifier catches lowercase cases via context."""
+
+    text = "Some old dad told someone to slow down."
+    candidates = extract_candidates(text)
+    assert candidates == []
+
+
+# ---------------------------------------------------------------------------
 # extract_candidates — Pass-1 deduplication of Pass-2 overlaps
 # ---------------------------------------------------------------------------
 
