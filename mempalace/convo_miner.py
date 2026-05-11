@@ -368,6 +368,24 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
             except Exception as e:
                 if "already exists" not in str(e).lower():
                     raise
+
+            # Phase 1 D3 — provenance preservation. Run AFTER the
+            # operational upsert so the operational drawer is durable
+            # before provenance extraction touches the substrate (a
+            # slow classifier call shouldn't delay operational durability).
+            # Failure-soft per the module's contract — mine_chunk_for_
+            # provenance returns 0 on any error, never raises.
+            try:
+                from mempalace.provenance.mining import mine_chunk_for_provenance
+                mine_chunk_for_provenance(
+                    collection,
+                    chunk_content=chunk["content"],
+                    source_file=source_file,
+                )
+            except Exception:
+                # Defense in depth — should never reach here because
+                # mine_chunk_for_provenance is itself failure-soft.
+                pass
     return drawers_added, room_counts_delta, False
 
 
