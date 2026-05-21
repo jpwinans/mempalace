@@ -3,8 +3,11 @@
 import logging
 import os
 import sqlite3
+import threading
+from typing import Any, NamedTuple
 
 import chromadb
+from chromadb.api.shared_system_client import SharedSystemClient
 
 from .base import BaseCollection
 
@@ -43,6 +46,48 @@ def _fix_blob_seq_ids(palace_path: str):
         logger.exception("Could not fix BLOB seq_ids in %s", db_path)
 
 
+class _CachedClient(NamedTuple):
+    """A cached PersistentClient tagged with the palace DB identity it was
+    opened against, so staleness can be detected on later access."""
+
+    client: Any
+    inode: int
+    mtime: float
+
+
+def _stat_db(db_path: str) -> tuple[int, float]:
+    """Return ``(inode, mtime)`` of *db_path*, or ``(0, 0.0)`` if it cannot
+    be stat-ed (missing file, or a filesystem that reports no inode)."""
+    try:
+        st = os.stat(db_path)
+        return st.st_ino, st.st_mtime
+    except OSError:
+        return 0, 0.0
+
+
+def _cache_entry_fresh(
+    entry: "_CachedClient | None", db_path: str, inode: int, mtime: float
+) -> bool:
+    """True when a cached client can still be served without reconnecting.
+
+    A reconnect is needed when the palace's ``chroma.sqlite3`` has a new
+    inode (a full rebuild via repair/nuke/re-mine replaces the file) or a
+    changed mtime (in-place writes by other processes that the cached
+    client's in-memory HNSW index never saw). ``st_ino == 0`` (FAT/exFAT,
+    which do not report inodes) disables the inode check as a safe fallback.
+    """
+    if entry is None:
+        return False
+    if not os.path.isfile(db_path):
+        # DB file gone (e.g. mid-rebuild): inode and mtime both read as 0,
+        # so the change checks below would both be False and wrongly keep
+        # the stale client. Force a reconnect instead.
+        return False
+    inode_changed = inode != 0 and inode != entry.inode
+    mtime_changed = mtime != 0.0 and abs(mtime - entry.mtime) > 0.01
+    return not (inode_changed or mtime_changed)
+
+
 class ChromaCollection(BaseCollection):
     """Thin adapter over a ChromaDB collection."""
 
@@ -75,19 +120,42 @@ class ChromaBackend:
     """Factory for MemPalace's default ChromaDB backend."""
 
     def __init__(self):
-        # Per-instance client cache: palace_path -> chromadb.PersistentClient
+        # Per-instance client cache: palace_path -> _CachedClient
         self._clients: dict = {}
+        # Serializes the reconnect path; the cache-hit fast path is lock-free.
+        self._client_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _client(self, palace_path: str):
-        """Return a cached PersistentClient for *palace_path*, creating one if needed."""
-        if palace_path not in self._clients:
-            _fix_blob_seq_ids(palace_path)
-            self._clients[palace_path] = chromadb.PersistentClient(path=palace_path)
-        return self._clients[palace_path]
+        """Return a cached PersistentClient for *palace_path*, reconnecting
+        when the palace's ``chroma.sqlite3`` changed on disk.
+
+        A long-lived client holds a frozen in-memory HNSW index; without
+        reconnection it never sees drawers written by other processes
+        (miners, the MCP server, the CLI) or a palace rebuilt underneath it.
+        The cache-hit fast path is lock-free; only the rare reconnect is
+        serialized, so concurrent callers cannot create duplicate clients.
+        """
+        db_path = os.path.join(palace_path, "chroma.sqlite3")
+        inode, mtime = _stat_db(db_path)
+
+        entry = self._clients.get(palace_path)
+        if _cache_entry_fresh(entry, db_path, inode, mtime):
+            return entry.client
+
+        with self._client_lock:
+            # Re-stat and re-check under the lock — another thread may have
+            # reconnected while this one waited.
+            inode, mtime = _stat_db(db_path)
+            entry = self._clients.get(palace_path)
+            if _cache_entry_fresh(entry, db_path, inode, mtime):
+                return entry.client
+            client = ChromaBackend.make_client(palace_path)
+            self._clients[palace_path] = _CachedClient(client, inode, mtime)
+            return client
 
     # ------------------------------------------------------------------
     # Public static helpers (for callers that manage their own caching)
@@ -95,12 +163,27 @@ class ChromaBackend:
 
     @staticmethod
     def make_client(palace_path: str):
-        """Create and return a fresh PersistentClient (fix BLOB seq_ids first).
+        """Create and return a genuinely fresh PersistentClient.
 
-        Intended for long-lived callers (e.g. mcp_server) that keep their own
-        inode/mtime-based client cache.
+        ChromaDB's ``SharedSystemClient`` caches the underlying ``System``
+        (and its in-memory HNSW segments) by path, process-wide — so a bare
+        ``PersistentClient(path)`` hands back a new client object that still
+        reuses the *frozen* segments of any earlier client for that path.
+        ``clear_system_cache()`` evicts those cached Systems so the new
+        client reloads segments from disk and observes writes made by other
+        processes (or a palace rebuilt underneath us).
+
+        The eviction is process-wide: it also drops other in-process
+        ChromaDB Systems, which then reload lazily on next use — a bounded
+        re-load cost, not a correctness change (cached Systems are evicted,
+        not stopped, so client objects already holding one keep working).
+        Both callers (``ChromaBackend._client`` and
+        ``mcp_server._get_client``) gate this behind inode/mtime change
+        detection, so it runs only on an actual palace-DB change, never on
+        the cache-hit path.
         """
         _fix_blob_seq_ids(palace_path)
+        SharedSystemClient.clear_system_cache()
         return chromadb.PersistentClient(path=palace_path)
 
     @staticmethod
