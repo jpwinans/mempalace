@@ -74,7 +74,8 @@ def _cache_entry_fresh(
     inode (a full rebuild via repair/nuke/re-mine replaces the file) or a
     changed mtime (in-place writes by other processes that the cached
     client's in-memory HNSW index never saw). ``st_ino == 0`` (FAT/exFAT,
-    which do not report inodes) disables the inode check as a safe fallback.
+    which do not report inodes) disables the inode check as a safe fallback
+    — on those filesystems staleness detection relies on mtime alone.
     """
     if entry is None:
         return False
@@ -153,6 +154,8 @@ class ChromaBackend:
             entry = self._clients.get(palace_path)
             if _cache_entry_fresh(entry, db_path, inode, mtime):
                 return entry.client
+            # A transiently-absent DB (mid-rebuild) yields a fresh empty DB
+            # here; the next call self-heals onto the rebuilt file (new inode).
             client = ChromaBackend.make_client(palace_path)
             self._clients[palace_path] = _CachedClient(client, inode, mtime)
             return client
@@ -179,10 +182,14 @@ class ChromaBackend:
         not stopped, so client objects already holding one keep working).
         Both callers (``ChromaBackend._client`` and
         ``mcp_server._get_client``) gate this behind inode/mtime change
-        detection, so it runs only on an actual palace-DB change, never on
-        the cache-hit path.
+        detection, so it runs on reconnect or initial client creation,
+        never on the cache-hit path.
         """
         _fix_blob_seq_ids(palace_path)
+        # clear_system_cache() is ChromaDB-internal API (imported from
+        # chromadb.api.shared_system_client) and is load-bearing: without
+        # the System eviction the reconnect silently reuses frozen segments.
+        # Verified against chromadb 0.6.3 — revisit on a chromadb upgrade.
         SharedSystemClient.clear_system_cache()
         return chromadb.PersistentClient(path=palace_path)
 
