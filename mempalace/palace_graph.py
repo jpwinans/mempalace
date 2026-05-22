@@ -506,10 +506,12 @@ def create_tunnel(
                 # reset the connection's strength / stability / access_count
                 # — defeating the living-connection layer. Backfill any
                 # still-missing fields so legacy records also pick up
-                # defaults on next touch.
-                for field in ("strength", "stability", "last_activated", "access_count"):
-                    if field in existing:
-                        tunnel[field] = existing[field]
+                # defaults on next touch. Per PR #1578 review
+                # (gemini-code-assist, medium priority): use dict-update
+                # with a comprehension so the field list lives in one place
+                # and future schema expansion can't drop a field by accident.
+                _dyn_fields = ("strength", "stability", "last_activated", "access_count")
+                tunnel.update({k: existing[k] for k in _dyn_fields if k in existing})
                 initialize_dynamics_fields(tunnel)
                 existing.clear()
                 existing.update(tunnel)

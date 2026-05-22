@@ -257,7 +257,13 @@ def compute_hallways_for_wing(
     for h in existing:
         if h.get("wing") != wing:
             continue
-        key = (h.get("entity_a"), h.get("entity_b"))
+        # Canonicalize the lookup key by sorting the entity pair — must
+        # match the symmetric ID generation in _hallway_id (which also
+        # sorts). Without this, a persisted record with reversed entity
+        # order would silently miss the lookup and lose its accumulated
+        # dynamics on every recompute. Per PR #1578 review
+        # (gemini-code-assist, HIGH priority).
+        key = tuple(sorted([h.get("entity_a"), h.get("entity_b")]))
         # Only copy the fields the dynamics layer cares about; everything
         # else is recomputed deterministically from the drawer set.
         existing_dynamics_lookup[key] = {
