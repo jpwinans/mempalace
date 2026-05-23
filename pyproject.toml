@@ -27,7 +27,15 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "chromadb>=1.5.4,<2",
+    # Upper bound capped at <1.5.9: that version added a strict _type field check
+    # in CollectionConfigurationInternal.from_json (chromadb/api/configuration.py:209)
+    # via a different sysdb load path (_load_config_from_json_str_and_migrate replaces
+    # the permissive load_collection_configuration_from_json_str from 1.5.4-1.5.8).
+    # The new path KeyErrors on collection configs written by older chromadb without
+    # the _type field (verified 2026-05-23 against ~/.mempalace/palace).
+    # Fork patch; not in upstream. Cap until upstream-chromadb fixes OR we migrate
+    # palace configs to include _type.
+    "chromadb>=1.5.4,<1.5.9",
     "pyyaml>=6.0,<7",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
