@@ -1620,7 +1620,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
     if wing:
         wing = sanitize_name(wing)
     else:
-        wing = f"wing_{agent_name.replace(' ', '_')}"
+        wing = agent_name.replace(' ', '_')
     room = "diary"
     col = _get_collection(create=True)
     if not col:
