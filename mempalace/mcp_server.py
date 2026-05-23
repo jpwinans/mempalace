@@ -930,7 +930,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
-    wing = f"wing_{agent_name.lower().replace(' ', '_')}"
+    wing = agent_name.lower().replace(' ', '_')
     room = "diary"
     col = _get_collection(create=True)
     if not col:
@@ -996,7 +996,7 @@ def tool_diary_read(agent_name: str, last_n: int = 10):
     except ValueError as e:
         return {"error": str(e)}
     last_n = max(1, min(last_n, 100))
-    wing = f"wing_{agent_name.lower().replace(' ', '_')}"
+    wing = agent_name.lower().replace(' ', '_')
     col = _get_collection()
     if not col:
         return _no_palace()

@@ -50,7 +50,7 @@ class _FakeCollection:
         return {"documents": docs, "metadatas": metas, "ids": list(range(len(docs)))}
 
 
-def _entry(date, filed_at, topic, document, wing="wing_ves", room="diary"):
+def _entry(date, filed_at, topic, document, wing="ves", room="diary"):
     return {
         "date": date,
         "filed_at": filed_at,
@@ -119,7 +119,7 @@ def test_no_entries_for_wing_returns_empty_list(monkeypatch, tmp_path):
     _patch_get_collection(
         monkeypatch,
         [
-            _entry("2026-05-10", "2026-05-10T10:00:00", "kai-diary", "kai-content", wing="wing_kai"),
+            _entry("2026-05-10", "2026-05-10T10:00:00", "kai-diary", "kai-content", wing="kai"),
         ],
     )
     entries = read_diary("ves")
@@ -132,7 +132,7 @@ def test_filters_to_agent_wing_and_diary_room(monkeypatch, tmp_path):
         monkeypatch,
         [
             _entry("2026-05-10", "2026-05-10T10:00:00", "ves-d", "should-appear"),
-            _entry("2026-05-10", "2026-05-10T10:00:00", "kai-d", "wrong-wing", wing="wing_kai"),
+            _entry("2026-05-10", "2026-05-10T10:00:00", "kai-d", "wrong-wing", wing="kai"),
             _entry("2026-05-10", "2026-05-10T10:00:00", "ves-a", "wrong-room", room="architecture"),
         ],
     )
@@ -146,10 +146,10 @@ def test_agent_name_lowercased_for_wing(monkeypatch, tmp_path):
     _patch_get_collection(
         monkeypatch,
         [
-            _entry("2026-05-10", "2026-05-10T10:00:00", "x", "content", wing="wing_ves"),
+            _entry("2026-05-10", "2026-05-10T10:00:00", "x", "content", wing="ves"),
         ],
     )
-    # Pass "Ves" capitalized — should still match wing_ves.
+    # Pass "Ves" capitalized — should still match ves.
     entries = read_diary("Ves")
     assert len(entries) == 1
 

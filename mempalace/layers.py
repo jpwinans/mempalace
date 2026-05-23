@@ -400,7 +400,7 @@ def read_diary(
 
     Args:
         agent: Agent name. Lower-cased for the wing key
-            (``"Ves"`` → ``wing_ves``).
+            (``"Ves"`` → ``ves``).
         last_n: Maximum entries to return. Default 5. ``read_diary``
             never returns more than this even if the palace contains
             more entries.
@@ -451,7 +451,7 @@ def read_diary(
         logger.debug("read_diary: get_collection failed: %s", exc)
         raise DiaryUnavailable(f"get_collection failed: {exc}") from exc
 
-    wing = f"wing_{agent.lower()}"
+    wing = agent.lower()
     try:
         # limit=10_000 is a generous upper bound; sort-and-slice
         # happens in-Python because chromadb's get() has no
