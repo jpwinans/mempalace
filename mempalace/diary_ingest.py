@@ -174,7 +174,6 @@ def ingest_diaries(
         _now = datetime.now(timezone.utc)
         now_iso = _now.isoformat()
         now_ts = _now.timestamp()
-        drawer_id = _diary_drawer_id(wing, date_str)
         entities = _extract_entities_for_metadata(text)
         source_file = str(diary_path)
 

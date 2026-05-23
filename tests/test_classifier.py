@@ -15,7 +15,6 @@ import urllib.error
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 
 from mempalace.provenance.classifier import (
     DEFAULT_ENDPOINT,

@@ -11,14 +11,12 @@ Covers:
 
 from __future__ import annotations
 
-import pytest
 
 from mempalace.provenance import (
     HEURISTIC_CONFIDENCE_QUOTE,
     HEURISTIC_CONFIDENCE_RELATION_ONLY,
     WING_LINEAGE_SCHEMA_DOC,
     ProvenanceCandidate,
-    ProvenanceRecord,
     extract_candidates,
     validate_candidate,
 )

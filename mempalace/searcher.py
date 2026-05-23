@@ -745,6 +745,38 @@ def _apply_candidate_strategy(
         merger(hits, query, palace_path, wing, room, n_results, max_distance=max_distance)
 
 
+def _open_drawers_or_error_dict(palace_path, collection_name):
+    """Open the drawers collection, distinguishing recoverable filesystem
+    states from unexpected errors.
+
+    Returns the open collection on success or the user-facing "No palace
+    found" error dict if the palace directory genuinely doesn't exist
+    (PalaceNotFoundError). All other exceptions log the full chained
+    traceback via logger.exception and propagate with their original type
+    so callers can distinguish the failure mode.
+
+    Used to be inlined in search_memories under a bare ``except Exception``
+    that swallowed every error under the same misleading "No palace found"
+    message, hiding e.g. chromadb's KeyError('_type') on a corrupt
+    collection config under the same diagnostic.
+    """
+    try:
+        return get_collection(palace_path, collection_name=collection_name, create=False)
+    except PalaceNotFoundError as e:
+        logger.error("No palace found at %s: %s", palace_path, e)
+        return {
+            "error": "No palace found",
+            "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
+        }
+    except Exception:
+        logger.exception(
+            "get_collection failed for palace=%s collection=%s",
+            palace_path,
+            collection_name,
+        )
+        raise
+
+
 def search_memories(
     query: str,
     palace_path: str,
@@ -808,14 +840,10 @@ def search_memories(
             collection_name=collection_name,
         )
 
-    try:
-        drawers_col = get_collection(palace_path, collection_name=collection_name, create=False)
-    except Exception as e:
-        logger.error("No palace found at %s: %s", palace_path, e)
-        return {
-            "error": "No palace found",
-            "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
-        }
+    opened = _open_drawers_or_error_dict(palace_path, collection_name)
+    if isinstance(opened, dict):
+        return opened
+    drawers_col = opened
 
     where = build_where_filter(wing, room)
 

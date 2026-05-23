@@ -17,10 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 
 from mempalace.provenance.mining import (
-    DEFAULT_CONFIDENCE_THRESHOLD,
     mine_chunk_for_provenance,
     _rewrite_speaker_to_source,
 )
