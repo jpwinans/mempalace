@@ -1,9 +1,7 @@
 """Tests for mempalace.backfill_filed_at_ts."""
 from __future__ import annotations
 
-import os
 import sqlite3
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
