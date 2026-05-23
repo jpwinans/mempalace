@@ -1295,6 +1295,19 @@ class ChromaBackend(BaseBackend):
             if inode_changed:
                 ChromaBackend._quarantined_paths.discard(palace_path)
             ChromaBackend._prepare_palace_for_open(palace_path)
+            # Fork PR #7 (2026-05-21 diagnostic): SharedSystemClient retains
+            # frozen segment state across PersistentClient instances on
+            # chromadb 0.6.3; without this call, reopening a palace at the
+            # same path reuses a stale in-memory HNSW even after
+            # _prepare_palace_for_open runs, so cross-process writes stay
+            # invisible to vector search. GUARD: only fire when the DB
+            # actually exists — firing on missing-DB-during-reconnect would
+            # let PersistentClient lazily recreate chroma.sqlite3, defeating
+            # mcp_server._get_client's missing-DB invalidation that zeroes
+            # _palace_db_inode (test_missing_db_invalidates_cache regression
+            # 2026-05-23).
+            if os.path.isfile(db_path):
+                SharedSystemClient.clear_system_cache()
             cached = chromadb.PersistentClient(path=palace_path)
             self._clients[palace_path] = cached
             # Re-stat after the client constructor runs: chromadb creates
@@ -1373,12 +1386,6 @@ class ChromaBackend(BaseBackend):
         vs. runtime thrash on steady-write daemons).
         """
         ChromaBackend._prepare_palace_for_open(palace_path)
-        # Fork PR #7 (2026-05-21 diagnostic): SharedSystemClient retains frozen
-        # segment state across PersistentClient instances on chromadb 0.6.3;
-        # without this call, reopening a palace at the same path reuses a stale
-        # in-memory HNSW even after _prepare_palace_for_open runs. Kept as
-        # defensive depth; safe no-op if upstream's mechanism already covers it.
-        SharedSystemClient.clear_system_cache()
         return chromadb.PersistentClient(path=palace_path)
 
     @staticmethod
