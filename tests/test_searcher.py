@@ -5,10 +5,12 @@ Uses the real ChromaDB fixtures from conftest.py for integration tests,
 plus mock-based tests for error paths.
 """
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from mempalace.backends import PalaceNotFoundError
 from mempalace.searcher import SearchError, search, search_memories
 
 
@@ -83,6 +85,51 @@ class TestSearchMemories:
             result = search_memories("test", "/fake/path")
         assert "error" in result
         assert "query failed" in result["error"]
+
+    def test_search_memories_palace_not_found_returns_error_dict(self):
+        """PalaceNotFoundError raised from get_collection (backend filesystem
+        race) returns the user-facing error dict, preserving the contract for
+        the common filesystem-missing case."""
+        with patch(
+            "mempalace.searcher.get_collection",
+            side_effect=PalaceNotFoundError("missing palace"),
+        ):
+            result = search_memories("anything", "/nonexistent/palace")
+        assert isinstance(result, dict)
+        assert result.get("error") == "No palace found"
+        assert "mempalace init" in result.get("hint", "")
+
+    def test_search_memories_unexpected_exception_propagates_with_chain(self, caplog):
+        """Non-filesystem errors (e.g. chromadb's KeyError('_type') from a
+        corrupt collection config) propagate to the caller with the original
+        exception type and chained traceback. Diagnostic logging fires via
+        logger.exception so the traceback always lands in mempalace logs even
+        if the caller swallows the exception silently."""
+        original = KeyError("_type")
+        with patch(
+            "mempalace.searcher.get_collection",
+            side_effect=original,
+        ):
+            with caplog.at_level(logging.ERROR, logger="mempalace_mcp"):
+                with pytest.raises(KeyError) as exc_info:
+                    search_memories("anything", "/some/palace")
+        # Original exception preserved (same type, same args).
+        assert exc_info.value.args == ("_type",)
+        # Chained context preserved (`__context__` / `__cause__` are the same
+        # instance, set by Python's implicit exception chaining when `raise`
+        # is used inside an except block).
+        assert exc_info.value.__context__ is original or exc_info.value is original
+        # Full traceback logged via logger.exception (level=ERROR plus
+        # exc_info=True), so callers that suppress the exception still leave a
+        # diagnostic trail naming the failure.
+        diagnostic_records = [
+            r for r in caplog.records
+            if r.name == "mempalace_mcp" and r.exc_info is not None
+        ]
+        assert len(diagnostic_records) >= 1, (
+            "Expected logger.exception() call from search_memories' get_collection "
+            "wrapper, got no records with exc_info set"
+        )
 
     def test_search_memories_vector_path_uses_explicit_collection_name(self):
         mock_col = MagicMock()

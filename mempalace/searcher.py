@@ -810,12 +810,25 @@ def search_memories(
 
     try:
         drawers_col = get_collection(palace_path, collection_name=collection_name, create=False)
-    except Exception as e:
+    except PalaceNotFoundError as e:
         logger.error("No palace found at %s: %s", palace_path, e)
         return {
             "error": "No palace found",
             "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
         }
+    except Exception:
+        # Non-filesystem failures (chromadb internals, corrupt collection
+        # config, lock contention, etc.) used to be swallowed under the same
+        # "No palace found" dict — masking the real cause. Log the full
+        # chained traceback so the diagnostic lands in mempalace's own logs
+        # regardless of how the caller handles the re-raised exception, then
+        # propagate the original exception type to the caller.
+        logger.exception(
+            "get_collection failed for palace=%s collection=%s",
+            palace_path,
+            collection_name,
+        )
+        raise
 
     where = build_where_filter(wing, room)
 
