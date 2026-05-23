@@ -258,6 +258,9 @@ def _chunk_by_paragraph(content: str, chunk_size: int, min_chunk_size: int) -> l
     for para in paragraphs:
         _emit_bounded(chunks, para, chunk_size, min_chunk_size)
 
+    return chunks
+
+
 def _emit_chunks(content: str) -> list:
     """Apply exclusion filter then boundary-aware splitting.
 
@@ -490,8 +493,8 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
                 if "already exists" not in str(e).lower():
                     raise
 
-            # Phase 1 D3 — provenance preservation. Run AFTER the
-            # operational upsert so the operational drawer is durable
+            # Provenance preservation hook (fork feature; impl in mempalace/provenance/).
+            # Run AFTER the operational upsert so the operational drawer is durable
             # before provenance extraction touches the substrate (a
             # slow classifier call shouldn't delay operational durability).
             # Failure-soft per the module's contract — mine_chunk_for_

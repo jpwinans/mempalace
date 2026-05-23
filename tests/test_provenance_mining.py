@@ -338,7 +338,8 @@ def test_convo_miner_integration_produces_both_operational_and_lineage_drawers(
         lambda source: _NullContext(),
     )
     monkeypatch.setattr(
-        "mempalace.convo_miner.file_already_mined", lambda col, src: False
+        "mempalace.convo_miner.file_already_mined",
+        lambda col, src, extract_mode=None: False,
     )
 
     from mempalace.convo_miner import _file_chunks_locked
