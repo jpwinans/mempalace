@@ -393,3 +393,59 @@ Force a reconnect to the palace database. Use this after external scripts or CLI
 **Parameters:** None
 
 **Returns:** `{ success, message, drawers, vector_disabled[, vector_disabled_reason] }` (on no-palace: `{ success: false, message, drawers, vector_disabled }`; on exception: `{ success: false, error }`)
+
+---
+
+### `mempalace_compute_hallways`
+
+Compute entity-pair hallways for one wing. Scans drawers in the wing, counts entity-pair co-occurrence across drawers, and materializes a hallway record for each pair whose count meets `min_count`. Persists `hallways.json` (records for other wings preserved). Returns the list of hallways computed for this wing.
+
+**Parameters:**
+- `wing` (string, required): Wing to compute hallways for
+- `min_count` (integer, optional, default `2`): Minimum co-occurrence count required to materialize a hallway. Single co-occurrences are noise; two or more is real signal.
+
+**Returns:** `list[hallway]` (list of hallway records for this wing). On error: `{ success: false, error }`.
+
+---
+
+### `mempalace_list_hallways`
+
+List hallway records, optionally filtered by wing.
+
+**Parameters:**
+- `wing` (string, optional): Filter to this wing only. Omit for all hallways across all wings.
+
+**Returns:** `list[hallway]`. On error: `{ success: false, error }`.
+
+---
+
+### `mempalace_compute_entity_tunnels`
+
+Compute entity tunnels involving one wing. An entity tunnel bridges two wings when the same entity (person, project, concept) appears in within-wing hallways of both. Loads the current hallway set across all wings, then materializes one tunnel per cross-wing entity bridge. Persists via `tunnels.json`. Returns the list of tunnels created.
+
+**Parameters:**
+- `wing` (string, required): Wing to compute entity tunnels for
+
+**Returns:** `list[tunnel]`. On error: `{ success: false, error }`.
+
+---
+
+### `mempalace_potentiate`
+
+Hebbian potentiation: strengthen one hallway or tunnel on a co-access event. Loads the connection by id from `hallways.json` (`kind="hallway"`) or `tunnels.json` (`kind="tunnel"`), increments its `strength` (capped at `MAX_STRENGTH`), grows `stability` if the activation is spaced ≥1h since the prior one, updates `last_activated` and `access_count`, and persists.
+
+**Parameters:**
+- `connection_id` (string, required): Hallway or tunnel id to potentiate
+- `kind` (string, optional, default `"hallway"`): `"hallway"` or `"tunnel"` — routes the lookup to exactly one store. Cross-store id lookups return an error rather than silently scanning the other store.
+
+**Returns:** updated connection record (dict). On missing id: `{ success: false, error }`. On invalid kind: `{ success: false, error }`.
+
+---
+
+### `mempalace_apply_decay_pass`
+
+Ebbinghaus exponential decay sweep over every hallway and every tunnel. Walks `hallways.json` and `tunnels.json`, calls `dynamics.apply_decay` on each record in place (floored at `STRENGTH_FLOOR`), and persists both stores. Intended for periodic invocation by the dream cycle; idempotent at a single instant (re-running without a potentiation in between produces the same final strengths).
+
+**Parameters:** None
+
+**Returns:** `{ halls_decayed, tunnels_decayed, mean_strength_post, at_floor_count, at_max_count }` — telemetry for the sweep. `at_floor_count` and `at_max_count` count records pinned at `STRENGTH_FLOOR` and `MAX_STRENGTH` respectively (within `1e-9` tolerance).

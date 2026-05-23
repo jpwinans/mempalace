@@ -3208,3 +3208,350 @@ class TestUnknownParamName:
         )
         assert "error" not in resp
         assert "result" in resp
+
+
+# ── Hallway / dynamics / tunnel MCP wrappers (Session 1) ─────────────────
+
+
+class TestComputeHallways:
+    def test_wraps_compute_hallways_for_wing(self, monkeypatch, config, palace_path, kg):
+        """tool_compute_hallways fetches the live collection, delegates to
+        hallways.compute_hallways_for_wing with the wrapped args, and returns
+        the hallway records the underlying API produces. The wrapper adds no
+        new behaviour; it only adapts the Python signature to the MCP call
+        shape (col is resolved from the cached client, not passed by caller).
+        """
+        from unittest.mock import patch as _patch
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        fake_col = MagicMock(name="fake_collection")
+        fake_records = [
+            {"id": "hallway_ves_sessions_alice_bob_abc12345", "wing": "ves_sessions"},
+            {"id": "hallway_ves_sessions_alice_carol_def67890", "wing": "ves_sessions"},
+        ]
+        with _patch("mempalace.mcp_server._get_collection", return_value=fake_col), _patch(
+            "mempalace.hallways.compute_hallways_for_wing", return_value=fake_records
+        ) as mock_compute:
+            result = mcp_server.tool_compute_hallways(wing="ves_sessions")
+
+        mock_compute.assert_called_once()
+        call_kwargs = mock_compute.call_args.kwargs
+        call_args = mock_compute.call_args.args
+        if call_args:
+            assert call_args[0] == "ves_sessions"
+        else:
+            assert call_kwargs.get("wing") == "ves_sessions"
+        assert call_kwargs.get("col") is fake_col
+        assert call_kwargs.get("min_count", 2) == 2
+        if isinstance(result, list):
+            assert result == fake_records
+        else:
+            assert isinstance(result, dict)
+            assert result.get("hallways") == fake_records or result.get("count") == 2
+
+    def test_passes_through_min_count(self, monkeypatch, config, palace_path, kg):
+        from unittest.mock import patch as _patch
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        fake_col = MagicMock()
+        with _patch("mempalace.mcp_server._get_collection", return_value=fake_col), _patch(
+            "mempalace.hallways.compute_hallways_for_wing", return_value=[]
+        ) as mock_compute:
+            mcp_server.tool_compute_hallways(wing="kai_sessions", min_count=5)
+        assert mock_compute.call_args.kwargs.get("min_count") == 5
+
+
+class TestListHallways:
+    def test_with_wing_filter(self, monkeypatch, config, palace_path, kg):
+        from unittest.mock import patch as _patch
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        fake_records = [{"id": "h1", "wing": "ves_sessions"}]
+        with _patch(
+            "mempalace.hallways.list_hallways", return_value=fake_records
+        ) as mock_list:
+            result = mcp_server.tool_list_hallways(wing="ves_sessions")
+        mock_list.assert_called_once_with(wing="ves_sessions")
+        if isinstance(result, list):
+            assert result == fake_records
+        else:
+            assert result.get("hallways") == fake_records
+
+    def test_without_wing_filter(self, monkeypatch, config, palace_path, kg):
+        from unittest.mock import patch as _patch
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        fake_records = [
+            {"id": "h1", "wing": "ves_sessions"},
+            {"id": "h2", "wing": "kai_sessions"},
+        ]
+        with _patch(
+            "mempalace.hallways.list_hallways", return_value=fake_records
+        ) as mock_list:
+            result = mcp_server.tool_list_hallways()
+        mock_list.assert_called_once_with(wing=None)
+        if isinstance(result, list):
+            assert result == fake_records
+        else:
+            assert result.get("hallways") == fake_records
+
+
+class TestComputeEntityTunnels:
+    def test_wraps_entity_tunnels_for_wing(self, monkeypatch, config, palace_path, kg):
+        from unittest.mock import patch as _patch
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        fake_hallways = [{"id": "h1", "wing": "ves_sessions", "entity_a": "Alice", "entity_b": "Bob"}]
+        fake_tunnels = [{"id": "tunnel_entity_alice_xyz", "label": "shared entity: Alice"}]
+        with _patch(
+            "mempalace.hallways.list_hallways", return_value=fake_hallways
+        ) as mock_list, _patch(
+            "mempalace.palace_graph.entity_tunnels_for_wing", return_value=fake_tunnels
+        ) as mock_tunnels:
+            result = mcp_server.tool_compute_entity_tunnels(wing="ves_sessions")
+
+        mock_list.assert_called_once()
+        mock_tunnels.assert_called_once()
+        call_args = mock_tunnels.call_args.args
+        call_kwargs = mock_tunnels.call_args.kwargs
+        if call_args:
+            assert call_args[0] == "ves_sessions"
+        else:
+            assert call_kwargs.get("wing") == "ves_sessions"
+        passed_hallways = call_args[1] if len(call_args) > 1 else call_kwargs.get("hallways")
+        assert passed_hallways == fake_hallways
+        if isinstance(result, list):
+            assert result == fake_tunnels
+        else:
+            assert result.get("tunnels") == fake_tunnels
+
+
+class TestPotentiate:
+    def _tmp_hallways(self, monkeypatch, tmp_path, records):
+        from mempalace import hallways
+
+        tmp_file = str(tmp_path / "hallways.json")
+        monkeypatch.setattr(hallways, "_HALLWAY_FILE", tmp_file)
+        # Use the production saver so the file shape matches what
+        # _load_hallways expects ({"schema_version", "hallways": [...]} wrapper).
+        hallways._save_hallways(records)
+        return tmp_file
+
+    def _tmp_tunnels(self, monkeypatch, tmp_path, records):
+        from mempalace import palace_graph
+
+        tmp_file = str(tmp_path / "tunnels.json")
+        with open(tmp_file, "w") as f:
+            json.dump(records, f)
+        monkeypatch.setattr(
+            palace_graph,
+            "_get_tunnel_file",
+            lambda config=None: tmp_file,
+        )
+        return tmp_file
+
+    def test_strength_increment_and_persist(self, monkeypatch, tmp_path, config, palace_path, kg):
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        seed = [
+            {
+                "id": "hallway_test_001",
+                "wing": "ves_sessions",
+                "strength": 1.0,
+                "stability": 1.0,
+                "access_count": 0,
+                "created_at": "2026-05-01T00:00:00+00:00",
+                "last_activated": "2026-05-01T00:00:00+00:00",
+            },
+        ]
+        path = self._tmp_hallways(monkeypatch, tmp_path, seed)
+
+        result = mcp_server.tool_potentiate(connection_id="hallway_test_001", kind="hallway")
+
+        updated_strength = None
+        if isinstance(result, dict):
+            updated_strength = result.get("strength") or result.get("connection", {}).get("strength")
+        assert updated_strength is not None, f"expected strength in {result!r}"
+        assert updated_strength > 1.0, (
+            f"strength must increment after potentiate; got {updated_strength!r}"
+        )
+
+        with open(path) as f:
+            raw = json.load(f)
+        saved = raw["hallways"] if isinstance(raw, dict) and "hallways" in raw else raw
+        saved_rec = next(r for r in saved if r["id"] == "hallway_test_001")
+        assert saved_rec["strength"] > 1.0
+        assert saved_rec["access_count"] == 1
+
+    def test_kind_dispatch_hallway_vs_tunnel(
+        self, monkeypatch, tmp_path, config, palace_path, kg
+    ):
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        hall_seed = [
+            {
+                "id": "hallway_X",
+                "wing": "ves_sessions",
+                "strength": 2.0,
+                "stability": 1.0,
+                "access_count": 0,
+                "created_at": "2026-05-01T00:00:00+00:00",
+                "last_activated": "2026-05-01T00:00:00+00:00",
+            }
+        ]
+        tunnel_seed = [
+            {
+                "id": "tunnel_Y",
+                "label": "shared entity: Alice",
+                "strength": 2.0,
+                "stability": 1.0,
+                "access_count": 0,
+                "created_at": "2026-05-01T00:00:00+00:00",
+                "last_activated": "2026-05-01T00:00:00+00:00",
+            }
+        ]
+        self._tmp_hallways(monkeypatch, tmp_path, hall_seed)
+        self._tmp_tunnels(monkeypatch, tmp_path, tunnel_seed)
+
+        r_hall = mcp_server.tool_potentiate(connection_id="hallway_X", kind="hallway")
+        assert isinstance(r_hall, dict)
+        assert not r_hall.get("error"), f"hallway_X potentiate errored: {r_hall!r}"
+
+        r_tunnel = mcp_server.tool_potentiate(connection_id="tunnel_Y", kind="tunnel")
+        assert isinstance(r_tunnel, dict)
+        assert not r_tunnel.get("error"), f"tunnel_Y potentiate errored: {r_tunnel!r}"
+
+        r_miss = mcp_server.tool_potentiate(connection_id="tunnel_Y", kind="hallway")
+        assert isinstance(r_miss, dict)
+        assert r_miss.get("error") or r_miss.get("success") is False, (
+            f"hallway lookup of tunnel id should fail; got {r_miss!r}"
+        )
+
+
+class TestApplyDecayPass:
+    def _seed_stores(self, monkeypatch, tmp_path, halls, tunnels):
+        from mempalace import hallways as hallways_mod
+        from mempalace import palace_graph
+
+        hall_file = str(tmp_path / "hallways.json")
+        monkeypatch.setattr(hallways_mod, "_HALLWAY_FILE", hall_file)
+        hallways_mod._save_hallways(halls)
+
+        tunnel_file = str(tmp_path / "tunnels.json")
+        monkeypatch.setattr(
+            palace_graph,
+            "_get_tunnel_file",
+            lambda config=None: tunnel_file,
+        )
+        palace_graph._save_tunnels(tunnels)
+        return hall_file, tunnel_file
+
+    @staticmethod
+    def _load_hallways_from_file(path):
+        with open(path) as f:
+            raw = json.load(f)
+        if isinstance(raw, dict) and "hallways" in raw:
+            return raw["hallways"]
+        return raw
+
+    @staticmethod
+    def _load_tunnels_from_file(path):
+        with open(path) as f:
+            return json.load(f)
+
+    def test_walks_halls_and_tunnels_and_persists(
+        self, monkeypatch, tmp_path, config, palace_path, kg
+    ):
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        old_iso = "2026-04-23T00:00:00+00:00"
+        halls = [
+            {
+                "id": "h1",
+                "strength": 3.0,
+                "stability": 1.0,
+                "access_count": 1,
+                "created_at": old_iso,
+                "last_activated": old_iso,
+            },
+        ]
+        tunnels = [
+            {
+                "id": "t1",
+                "strength": 3.0,
+                "stability": 1.0,
+                "access_count": 1,
+                "created_at": old_iso,
+                "last_activated": old_iso,
+            },
+        ]
+        hall_path, tunnel_path = self._seed_stores(monkeypatch, tmp_path, halls, tunnels)
+
+        mcp_server.tool_apply_decay_pass()
+
+        saved_halls = self._load_hallways_from_file(hall_path)
+        saved_tunnels = self._load_tunnels_from_file(tunnel_path)
+
+        assert saved_halls[0]["strength"] < 3.0, (
+            f"hall strength should decay; got {saved_halls[0]['strength']!r}"
+        )
+        assert saved_tunnels[0]["strength"] < 3.0, (
+            f"tunnel strength should decay; got {saved_tunnels[0]['strength']!r}"
+        )
+
+    def test_returns_telemetry_dict(self, monkeypatch, tmp_path, config, palace_path, kg):
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        old_iso = "2026-04-23T00:00:00+00:00"
+        halls = [
+            {
+                "id": "h1",
+                "strength": 2.0,
+                "stability": 1.0,
+                "access_count": 1,
+                "created_at": old_iso,
+                "last_activated": old_iso,
+            },
+            {
+                "id": "h2",
+                "strength": 2.0,
+                "stability": 1.0,
+                "access_count": 1,
+                "created_at": old_iso,
+                "last_activated": old_iso,
+            },
+        ]
+        tunnels = [
+            {
+                "id": "t1",
+                "strength": 2.0,
+                "stability": 1.0,
+                "access_count": 1,
+                "created_at": old_iso,
+                "last_activated": old_iso,
+            },
+        ]
+        self._seed_stores(monkeypatch, tmp_path, halls, tunnels)
+
+        result = mcp_server.tool_apply_decay_pass()
+
+        assert isinstance(result, dict), f"telemetry must be a dict; got {type(result).__name__}"
+        for key in (
+            "halls_decayed",
+            "tunnels_decayed",
+            "mean_strength_post",
+            "at_floor_count",
+            "at_max_count",
+        ):
+            assert key in result, f"telemetry missing {key!r} in {result!r}"
+        assert result["halls_decayed"] == 2
+        assert result["tunnels_decayed"] == 1
