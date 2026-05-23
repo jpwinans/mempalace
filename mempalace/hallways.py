@@ -198,16 +198,33 @@ def compute_hallways_for_wing(
 
     min_count = max(1, int(min_count))
 
-    # 1. Query drawers for this wing.
+    # 1. Query drawers for this wing — paginated.
+    # Original implementation used col.get(where={"wing": wing}, ...) without
+    # pagination. On palaces >~32k drawers in the wing, that trips chromadb's
+    # SQLite layer with "too many SQL variables" (SQLITE_MAX_VARIABLE_NUMBER=999
+    # by default) because chromadb's where-filter builds an IN(...) with all
+    # matching ids. Mirror the miner.py:1019 batch pattern (CHANGELOG #851):
+    # paginate via limit+offset over the whole collection and filter wing in
+    # Python. Trades one full-scan for safety on large palaces.
+    BATCH_SIZE = 5000
+    metadatas: list = []
     try:
-        results = col.get(where={"wing": wing}, include=["metadatas"])
+        total = col.count()
+        offset = 0
+        while offset < total:
+            r = col.get(limit=BATCH_SIZE, offset=offset, include=["metadatas"])
+            batch = (r or {}).get("metadatas") or []
+            if not batch:
+                break
+            # Filter to this wing client-side (avoids the SQL-variable cap).
+            metadatas.extend(m for m in batch if isinstance(m, dict) and m.get("wing") == wing)
+            offset += len(batch)
     except Exception:
         logger.warning(
             "compute_hallways_for_wing: collection.get failed for %s", wing, exc_info=True
         )
         return []
 
-    metadatas = (results or {}).get("metadatas") or []
     if not metadatas:
         return []
 
