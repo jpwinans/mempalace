@@ -1960,6 +1960,181 @@ def tool_reconnect():
         return {"success": False, "error": str(e)}
 
 
+# ==================== HALLWAY / DYNAMICS / TUNNEL TOOLS ====================
+#
+# MCP wrappers over upstream's cognitive primitives:
+#   - hallways.compute_hallways_for_wing / list_hallways
+#   - palace_graph.entity_tunnels_for_wing
+#   - dynamics.potentiate / apply_decay
+#
+# Add-only against the underlying Python APIs: signatures and semantics
+# are untouched; these wrappers adapt them to the MCP call shape (col
+# resolved from the cached client, JSON load/persist orchestration for
+# the pure-on-dict dynamics functions).
+
+
+def tool_compute_hallways(wing: str, min_count: int = 2):
+    """Compute entity-pair hallways for one wing and persist the result.
+
+    Delegates to ``hallways.compute_hallways_for_wing``; the wrapped function
+    handles persistence (records for other wings are preserved). Returns the
+    just-computed list of hallway records for this wing.
+    """
+    if not isinstance(wing, str) or not wing.strip():
+        return {"success": False, "error": "wing must be a non-empty string"}
+    try:
+        from . import hallways
+    except Exception as e:  # pragma: no cover — defensive only
+        return {"success": False, "error": f"hallways module unavailable: {e}"}
+
+    col = _get_collection()
+    if col is None:
+        return _no_palace()
+
+    try:
+        records = hallways.compute_hallways_for_wing(
+            wing, col=col, min_count=int(min_count)
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    return list(records)
+
+
+def tool_list_hallways(wing: str = None):
+    """List hallway records, optionally filtered by wing."""
+    try:
+        from . import hallways
+    except Exception as e:  # pragma: no cover
+        return {"success": False, "error": f"hallways module unavailable: {e}"}
+    try:
+        records = hallways.list_hallways(wing=wing)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    return list(records)
+
+
+def tool_compute_entity_tunnels(wing: str):
+    """Compute entity tunnels for one wing against the current hallway set.
+
+    Loads the current hallway list (all wings, since entity tunnels bridge
+    wings) and delegates to ``palace_graph.entity_tunnels_for_wing``. The
+    wrapped function persists via ``create_tunnel`` internally.
+    """
+    if not isinstance(wing, str) or not wing.strip():
+        return {"success": False, "error": "wing must be a non-empty string"}
+    try:
+        from . import hallways
+        from . import palace_graph as _palace_graph
+    except Exception as e:  # pragma: no cover
+        return {"success": False, "error": f"hallway/palace_graph module unavailable: {e}"}
+
+    try:
+        all_hallways = hallways.list_hallways()
+        tunnels = _palace_graph.entity_tunnels_for_wing(wing, all_hallways)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    return list(tunnels)
+
+
+def tool_potentiate(connection_id: str, kind: str = "hallway"):
+    """Strengthen one hallway or tunnel by id (Hebbian potentiation).
+
+    Loads the connection record from the appropriate JSON store
+    (hallways.json for kind='hallway', tunnels.json for kind='tunnel'),
+    calls ``dynamics.potentiate`` (in-place mutation), persists the
+    updated list back, and returns the updated record. The kind argument
+    routes to ONE store only; cross-store id lookups return an error.
+    """
+    if not isinstance(connection_id, str) or not connection_id.strip():
+        return {"success": False, "error": "connection_id must be a non-empty string"}
+    if kind not in ("hallway", "tunnel"):
+        return {
+            "success": False,
+            "error": f"unknown kind: {kind!r} (expected 'hallway' or 'tunnel')",
+        }
+
+    try:
+        from .dynamics import potentiate as _potentiate
+        if kind == "hallway":
+            from .hallways import _load_hallways, _save_hallways
+
+            records = _load_hallways()
+        else:
+            from .palace_graph import _load_tunnels, _save_tunnels
+
+            records = _load_tunnels()
+    except Exception as e:  # pragma: no cover
+        return {"success": False, "error": f"store load failed: {e}"}
+
+    target = next((r for r in records if r.get("id") == connection_id), None)
+    if target is None:
+        return {
+            "success": False,
+            "error": f"{kind} {connection_id!r} not found",
+        }
+
+    try:
+        _potentiate(target)
+        if kind == "hallway":
+            _save_hallways(records)
+        else:
+            _save_tunnels(records)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    return dict(target)
+
+
+def tool_apply_decay_pass():
+    """Apply Ebbinghaus exponential decay to every hallway and tunnel.
+
+    Walks ``hallways.json`` and ``tunnels.json``, calls
+    ``dynamics.apply_decay`` on each record in place, and persists both
+    stores. Returns telemetry: counts walked, mean post-decay strength,
+    floor/ceiling occupancy. Read-mutate-write per store; idempotent at
+    a single instant.
+    """
+    try:
+        from .dynamics import apply_decay as _apply_decay
+        from .dynamics import MAX_STRENGTH as _MAX_STRENGTH
+        from .dynamics import STRENGTH_FLOOR as _STRENGTH_FLOOR
+        from .hallways import _load_hallways, _save_hallways
+        from .palace_graph import _load_tunnels, _save_tunnels
+    except Exception as e:  # pragma: no cover
+        return {"success": False, "error": f"store/dynamics import failed: {e}"}
+
+    try:
+        halls = _load_hallways()
+        for h in halls:
+            _apply_decay(h)
+        _save_hallways(halls)
+
+        tunnels = _load_tunnels()
+        for t in tunnels:
+            _apply_decay(t)
+        _save_tunnels(tunnels)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    all_strengths = [
+        float(r.get("strength", 0.0)) for r in (halls + tunnels) if isinstance(r, dict)
+    ]
+    mean_strength = (sum(all_strengths) / len(all_strengths)) if all_strengths else 0.0
+    # Inclusive floor/ceiling bins with a small epsilon — decay floors at
+    # STRENGTH_FLOOR exactly, but rounding can land 1e-12 above/below.
+    eps = 1e-9
+    at_floor = sum(1 for s in all_strengths if s <= _STRENGTH_FLOOR + eps)
+    at_max = sum(1 for s in all_strengths if s >= _MAX_STRENGTH - eps)
+
+    return {
+        "halls_decayed": len(halls),
+        "tunnels_decayed": len(tunnels),
+        "mean_strength_post": mean_strength,
+        "at_floor_count": at_floor,
+        "at_max_count": at_max,
+    }
+
+
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
@@ -2415,6 +2590,93 @@ TOOLS = {
             "properties": {},
         },
         "handler": tool_reconnect,
+    },
+    "mempalace_compute_hallways": {
+        "description": (
+            "Compute entity-pair hallways for one wing. Scans drawers in the wing, counts "
+            "entity-pair co-occurrence across drawers, and materializes a hallway record "
+            "for each pair whose count meets min_count. Persists hallways.json (other wings' "
+            "records preserved). Returns the list of hallways computed for this wing."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {"type": "string", "description": "Wing to compute hallways for"},
+                "min_count": {
+                    "type": "integer",
+                    "description": "Minimum co-occurrence count to materialize a hallway (default 2)",
+                },
+            },
+            "required": ["wing"],
+        },
+        "handler": tool_compute_hallways,
+    },
+    "mempalace_list_hallways": {
+        "description": (
+            "List hallway records. Optional ``wing`` filter; omit for all hallways across all wings."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {
+                    "type": "string",
+                    "description": "Filter to this wing only (optional)",
+                },
+            },
+        },
+        "handler": tool_list_hallways,
+    },
+    "mempalace_compute_entity_tunnels": {
+        "description": (
+            "Compute entity tunnels involving one wing. An entity tunnel bridges two wings "
+            "when the same entity appears in within-wing hallways of both. Loads the current "
+            "hallway set across all wings, then materializes one tunnel per cross-wing "
+            "entity bridge. Persists via tunnels.json. Returns the list of tunnels created."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {"type": "string", "description": "Wing to compute entity tunnels for"},
+            },
+            "required": ["wing"],
+        },
+        "handler": tool_compute_entity_tunnels,
+    },
+    "mempalace_potentiate": {
+        "description": (
+            "Hebbian potentiation: strengthen one hallway or tunnel on a co-access event. "
+            "Loads the connection by id from hallways.json (kind='hallway') or tunnels.json "
+            "(kind='tunnel'), increments its strength (capped at MAX_STRENGTH), grows "
+            "stability if the activation is spaced ≥1 h since the prior one, updates "
+            "last_activated and access_count, and persists. Returns the updated record."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "connection_id": {
+                    "type": "string",
+                    "description": "Hallway or tunnel id to potentiate",
+                },
+                "kind": {
+                    "type": "string",
+                    "description": "'hallway' or 'tunnel' (default 'hallway')",
+                },
+            },
+            "required": ["connection_id"],
+        },
+        "handler": tool_potentiate,
+    },
+    "mempalace_apply_decay_pass": {
+        "description": (
+            "Ebbinghaus decay sweep: walk every hallway and every tunnel, apply exponential "
+            "decay to each strength (floored at STRENGTH_FLOOR), and persist both stores. "
+            "Returns telemetry: halls_decayed, tunnels_decayed, mean_strength_post, "
+            "at_floor_count, at_max_count. Intended for periodic invocation by the dream "
+            "cycle; idempotent at a single instant (re-running without a potentiation in "
+            "between produces the same final strengths)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": tool_apply_decay_pass,
     },
 }
 
