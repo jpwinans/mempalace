@@ -42,9 +42,88 @@ import sqlite3
 import threading
 from datetime import date, datetime
 from pathlib import Path
+from typing import Optional
+from .config import sanitize_iso_temporal
 
 
 DEFAULT_KG_PATH = os.path.expanduser("~/.mempalace/knowledge_graph.sqlite3")
+
+
+def _is_date_only_temporal(value: str) -> bool:
+    return isinstance(value, str) and len(value) == 10 and value[4] == "-" and value[7] == "-"
+
+
+def _temporal_start_key(value: Optional[str]) -> Optional[str]:
+    """Return the comparable instant for a valid_from/as_of value."""
+
+    if value is None:
+        return None
+
+    if _is_date_only_temporal(value):
+        return f"{value}T00:00:00Z"
+
+    return value
+
+
+def _temporal_end_key(value: Optional[str]) -> Optional[str]:
+    """Return the comparable instant for a valid_to value.
+
+    Date-only valid_to values represent the whole day for backward
+    compatibility with existing KG facts.
+    """
+
+    if value is None:
+        return None
+
+    if _is_date_only_temporal(value):
+        return f"{value}T23:59:59Z"
+
+    return value
+
+
+def _sql_temporal_start_expr(column: str) -> str:
+    """SQLite expression for comparing valid_from-style temporal values."""
+
+    return (
+        f"CASE WHEN length({column}) = 10 "
+        f"AND substr({column}, 5, 1) = '-' "
+        f"AND substr({column}, 8, 1) = '-' "
+        f"THEN {column} || 'T00:00:00Z' ELSE {column} END"
+    )
+
+
+def _sql_temporal_end_expr(column: str) -> str:
+    """SQLite expression for comparing valid_to-style temporal values."""
+
+    return (
+        f"CASE WHEN length({column}) = 10 "
+        f"AND substr({column}, 5, 1) = '-' "
+        f"AND substr({column}, 8, 1) = '-' "
+        f"THEN {column} || 'T23:59:59Z' ELSE {column} END"
+    )
+
+
+def _temporal_filter_sql(as_of: str) -> tuple[str, list[str]]:
+    """Return SQL and parameters for an as-of temporal filter.
+
+    Date-only KG values are normalized for comparison:
+
+    - valid_from='2026-05-06' compares as '2026-05-06T00:00:00Z'
+    - valid_to='2026-05-06' compares as '2026-05-06T23:59:59Z'
+
+    This keeps legacy date-only facts working when callers query with
+    canonical UTC datetimes such as '2026-05-06T15:00:00Z'.
+    """
+
+    as_of_key = _temporal_start_key(as_of)
+    valid_from_expr = _sql_temporal_start_expr("t.valid_from")
+    valid_to_expr = _sql_temporal_end_expr("t.valid_to")
+
+    return (
+        f" AND (t.valid_from IS NULL OR {valid_from_expr} <= ?) "
+        f"AND (t.valid_to IS NULL OR {valid_to_expr} >= ?)",
+        [as_of_key, as_of_key],
+    )
 
 
 class KnowledgeGraph:
@@ -83,6 +162,8 @@ class KnowledgeGraph:
                 confidence REAL DEFAULT 1.0,
                 source_closet TEXT,
                 source_file TEXT,
+                source_drawer_id TEXT,
+                adapter_name TEXT,
                 extracted_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (subject) REFERENCES entities(id),
                 FOREIGN KEY (object) REFERENCES entities(id)
@@ -93,7 +174,24 @@ class KnowledgeGraph:
             CREATE INDEX IF NOT EXISTS idx_triples_predicate ON triples(predicate);
             CREATE INDEX IF NOT EXISTS idx_triples_valid ON triples(valid_from, valid_to);
         """)
+        self._migrate_schema(conn)
         conn.commit()
+
+    def _migrate_schema(self, conn):
+        """Backwards-compatible schema migration for older triples tables.
+
+        Fresh palaces get ``source_drawer_id`` / ``adapter_name`` (RFC 002 §5.5)
+        directly from the canonical ``CREATE TABLE`` above, so this path is a
+        no-op on new installs. It exists for palaces that were created before
+        those columns were added: SQLite has no ``ADD COLUMN IF NOT EXISTS``,
+        so we introspect the schema and only issue the ALTER when the column
+        is missing.
+        """
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(triples)")}
+        if "source_drawer_id" not in existing:
+            conn.execute("ALTER TABLE triples ADD COLUMN source_drawer_id TEXT")
+        if "adapter_name" not in existing:
+            conn.execute("ALTER TABLE triples ADD COLUMN adapter_name TEXT")
 
     def _conn(self):
         if self._connection is None:
@@ -108,6 +206,15 @@ class KnowledgeGraph:
             if self._connection is not None:
                 self._connection.close()
                 self._connection = None
+
+    def __enter__(self):
+        """Allow KnowledgeGraph to be used as a context manager."""
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        """Close the SQLite connection when leaving a context manager block."""
+        self.close()
+        return False
 
     def _entity_id(self, name: str) -> str:
         return name.lower().replace(" ", "_").replace("'", "")
@@ -137,15 +244,39 @@ class KnowledgeGraph:
         confidence: float = 1.0,
         source_closet: str = None,
         source_file: str = None,
+        source_drawer_id: str = None,
+        adapter_name: str = None,
     ):
         """
         Add a relationship triple: subject → predicate → object.
 
+        ``source_drawer_id`` and ``adapter_name`` are RFC 002 §5.5 provenance
+        fields populated by adapters that advertise ``supports_kg_triples``;
+        they default to ``None`` so every existing caller stays
+        source-compatible.
+
         Examples:
             add_triple("Max", "child_of", "Alice", valid_from="2015-04-01")
             add_triple("Max", "does", "swimming", valid_from="2025-01-01")
-            add_triple("Alice", "worried_about", "Max injury", valid_from="2026-01", valid_to="2026-02")
+            add_triple("Alice", "worried_about", "Max injury", valid_from="2026-01-01")
         """
+
+        valid_from = sanitize_iso_temporal(valid_from, "valid_from")
+        valid_to = sanitize_iso_temporal(valid_to, "valid_to")
+
+        # Reject inverted intervals. Use temporal comparison keys rather than
+        # raw string comparison so legacy date-only values and canonical UTC
+        # datetimes can safely coexist.
+        if (
+            valid_from is not None
+            and valid_to is not None
+            and _temporal_end_key(valid_to) < _temporal_start_key(valid_from)
+        ):
+            raise ValueError(
+                f"valid_to={valid_to!r} is before valid_from={valid_from!r}; "
+                "an inverted interval would be invisible to every KG query"
+            )
+
         sub_id = self._entity_id(subject)
         obj_id = self._entity_id(obj)
         pred = predicate.lower().replace(" ", "_")
@@ -155,10 +286,12 @@ class KnowledgeGraph:
             conn = self._conn()
             with conn:
                 conn.execute(
-                    "INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)", (sub_id, subject)
+                    "INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)",
+                    (sub_id, subject),
                 )
                 conn.execute(
-                    "INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)", (obj_id, obj)
+                    "INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)",
+                    (obj_id, obj),
                 )
 
                 # Check for existing identical triple
@@ -166,15 +299,16 @@ class KnowledgeGraph:
                     "SELECT id FROM triples WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
                     (sub_id, pred, obj_id),
                 ).fetchone()
-
                 if existing:
                     return existing["id"]  # Already exists and still valid
 
                 triple_id = f"t_{sub_id}_{pred}_{obj_id}_{hashlib.sha256(f'{valid_from}{datetime.now().isoformat()}'.encode()).hexdigest()[:12]}"
-
                 conn.execute(
-                    """INSERT INTO triples (id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO triples (
+                        id, subject, predicate, object, valid_from, valid_to,
+                        confidence, source_closet, source_file,
+                        source_drawer_id, adapter_name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         triple_id,
                         sub_id,
@@ -185,22 +319,41 @@ class KnowledgeGraph:
                         confidence,
                         source_closet,
                         source_file,
+                        source_drawer_id,
+                        adapter_name,
                     ),
                 )
-        return triple_id
+                return triple_id
 
     def invalidate(self, subject: str, predicate: str, obj: str, ended: str = None):
-        """Mark a relationship as no longer valid (set valid_to date)."""
+        """Mark a relationship as no longer valid (set valid_to date/time)."""
         sub_id = self._entity_id(subject)
         obj_id = self._entity_id(obj)
         pred = predicate.lower().replace(" ", "_")
-        ended = ended or date.today().isoformat()
+        ended = sanitize_iso_temporal(ended or date.today().isoformat(), "ended")
 
         with self._lock:
             conn = self._conn()
             with conn:
+                rows = conn.execute(
+                    "SELECT id, valid_from FROM triples "
+                    "WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
+                    (sub_id, pred, obj_id),
+                ).fetchall()
+
+                for row in rows:
+                    valid_from = row["valid_from"]
+                    if valid_from is not None and _temporal_end_key(ended) < _temporal_start_key(
+                        valid_from
+                    ):
+                        raise ValueError(
+                            f"valid_to={ended!r} is before valid_from={valid_from!r}; "
+                            "an inverted interval would be invisible to every KG query"
+                        )
+
                 conn.execute(
-                    "UPDATE triples SET valid_to=? WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
+                    "UPDATE triples SET valid_to=? "
+                    "WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
                     (ended, sub_id, pred, obj_id),
                 )
 
@@ -211,20 +364,27 @@ class KnowledgeGraph:
         Get all relationships for an entity.
 
         direction: "outgoing" (entity → ?), "incoming" (? → entity), "both"
-        as_of: date string — only return facts valid at that time
+        as_of: ISO date or canonical UTC datetime — only return facts valid then
         """
+        as_of = sanitize_iso_temporal(as_of, "as_of")
         eid = self._entity_id(name)
-
         results = []
+
+        temporal_sql = ""
+        temporal_params = []
+        if as_of:
+            temporal_sql, temporal_params = _temporal_filter_sql(as_of)
+
         with self._lock:
             conn = self._conn()
 
             if direction in ("outgoing", "both"):
-                query = "SELECT t.*, e.name as obj_name FROM triples t JOIN entities e ON t.object = e.id WHERE t.subject = ?"
-                params = [eid]
-                if as_of:
-                    query += " AND (t.valid_from IS NULL OR t.valid_from <= ?) AND (t.valid_to IS NULL OR t.valid_to >= ?)"
-                    params.extend([as_of, as_of])
+                query = (
+                    "SELECT t.*, e.name as obj_name FROM triples t "
+                    "JOIN entities e ON t.object = e.id WHERE t.subject = ?" + temporal_sql
+                )
+                params = [eid] + temporal_params
+
                 for row in conn.execute(query, params).fetchall():
                     results.append(
                         {
@@ -241,11 +401,12 @@ class KnowledgeGraph:
                     )
 
             if direction in ("incoming", "both"):
-                query = "SELECT t.*, e.name as sub_name FROM triples t JOIN entities e ON t.subject = e.id WHERE t.object = ?"
-                params = [eid]
-                if as_of:
-                    query += " AND (t.valid_from IS NULL OR t.valid_from <= ?) AND (t.valid_to IS NULL OR t.valid_to >= ?)"
-                    params.extend([as_of, as_of])
+                query = (
+                    "SELECT t.*, e.name as sub_name FROM triples t "
+                    "JOIN entities e ON t.subject = e.id WHERE t.object = ?" + temporal_sql
+                )
+                params = [eid] + temporal_params
+
                 for row in conn.execute(query, params).fetchall():
                     results.append(
                         {
@@ -265,7 +426,9 @@ class KnowledgeGraph:
 
     def query_relationship(self, predicate: str, as_of: str = None):
         """Get all triples with a given relationship type."""
+        as_of = sanitize_iso_temporal(as_of, "as_of")
         pred = predicate.lower().replace(" ", "_")
+
         query = """
             SELECT t.*, s.name as sub_name, o.name as obj_name
             FROM triples t
@@ -274,9 +437,11 @@ class KnowledgeGraph:
             WHERE t.predicate = ?
         """
         params = [pred]
+
         if as_of:
-            query += " AND (t.valid_from IS NULL OR t.valid_from <= ?) AND (t.valid_to IS NULL OR t.valid_to >= ?)"
-            params.extend([as_of, as_of])
+            temporal_sql, temporal_params = _temporal_filter_sql(as_of)
+            query += temporal_sql
+            params.extend(temporal_params)
 
         results = []
         with self._lock:

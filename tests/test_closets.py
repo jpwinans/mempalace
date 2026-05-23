@@ -23,6 +23,7 @@ Coverage map:
     cross-diary collisions, force=True purges leftover closets.
 """
 
+import hashlib
 import json
 import multiprocessing
 import os
@@ -30,6 +31,7 @@ import tempfile
 import threading
 import time
 
+import pytest
 import yaml
 
 from mempalace.miner import (
@@ -139,9 +141,9 @@ class TestMineLock:
         # Sort by entry time and verify the second entry is after the first exit.
         intervals.sort(key=lambda iv: iv[1])
         (_, enter_a, exit_a), (_, enter_b, exit_b) = intervals
-        assert (
-            enter_a < exit_a <= enter_b < exit_b
-        ), f"critical sections overlapped — lock failed to serialize: {intervals}"
+        assert enter_a < exit_a <= enter_b < exit_b, (
+            f"critical sections overlapped — lock failed to serialize: {intervals}"
+        )
 
 
 # ── build_closet_lines ─────────────────────────────────────────────────
@@ -314,15 +316,15 @@ class TestMinerClosetRebuild:
         second_docs = "\n".join(second_pass["documents"]).lower()
         assert "only topic now" in second_docs
         for i in range(15):
-            assert (
-                f"topic {i}\n" not in second_docs
-            ), f"stale 'Topic {i}' from first mine survived the rebuild"
+            assert f"topic {i}\n" not in second_docs, (
+                f"stale 'Topic {i}' from first mine survived the rebuild"
+            )
         # Numbered closets that existed only in the larger first run must be gone.
         leftover = first_ids - set(second_pass["ids"])
         for stale_id in leftover:
-            assert not col.get(ids=[stale_id])[
-                "ids"
-            ], f"orphan closet {stale_id} from larger first run survived purge"
+            assert not col.get(ids=[stale_id])["ids"], (
+                f"orphan closet {stale_id} from larger first run survived purge"
+            )
 
 
 # ── _extract_drawer_ids_from_closet ───────────────────────────────────
@@ -605,6 +607,84 @@ class TestDiaryIngest:
         result = ingest_diaries(str(diary_dir), str(palace_dir))
         assert result["days_updated"] == 0
 
+    def test_ingest_detects_same_size_content_edit(self, tmp_path):
+        # Regression #925: the prior skip-check compared byte length only, so
+        # any in-place edit preserving total length (typo fix "teh"→"the",
+        # word swap, character reorder) was silently dropped. Content-hash
+        # check must catch the change AND rebuild the searchable closet so
+        # the index does not stay stale while the drawer updates.
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        diary_file = diary_dir / "2026-04-13.md"
+        # Original has the typo "Teh"; the edit fixes it to "The" — same length.
+        original = "# 2026-04-13\n\n## 10:00 — Test\n\nTeh elaborate jakarta postgres bug.\n"
+        edited = "# 2026-04-13\n\n## 10:00 — Test\n\nThe elaborate jakarta postgres bug.\n"
+        assert len(original) == len(edited), "test setup: edited content must be same length"
+        diary_file.write_text(original)
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        diary_file.write_text(edited)
+        result = ingest_diaries(str(diary_dir), str(palace_dir))
+        assert result["days_updated"] == 1, "same-size content edit must trigger re-ingest"
+
+        # Drawer must hold the corrected text.
+        drawers = get_collection(str(palace_dir)).get(where={"source_file": str(diary_file)})
+        joined_drawers = "\n".join(drawers["documents"])
+        assert "The elaborate" in joined_drawers
+        assert "Teh elaborate" not in joined_drawers, "drawer still holds pre-edit content"
+
+        # And the closet (search index) must reflect the edit too — not just the
+        # drawer. Otherwise searches would surface stale text.
+        closets = get_closets_collection(str(palace_dir)).get(
+            where={"source_file": str(diary_file)}
+        )
+        joined_closets = "\n".join(closets["documents"])
+        assert "Teh elaborate" not in joined_closets, "closet index still holds stale content"
+
+    def test_legacy_state_backfills_content_hash(self, tmp_path):
+        # Upgraded users can carry legacy state entries without ``content_hash``.
+        # Same-size skip is preserved for that one run, but the hash must be
+        # recorded so the strict check engages on subsequent runs.
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        diary_file = diary_dir / "2026-04-13.md"
+        # Write explicit UTF-8 so the round-trip matches how diary_ingest reads.
+        # Windows' default text-mode encoding is cp1252; without this the em
+        # dash would round-trip lossy and the hash assertion below would fail.
+        text = "# 2026-04-13\n\n## 10:00 — Test\n\nUnchanged body content here.\n"
+        diary_file.write_text(text, encoding="utf-8")
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import _state_file_for, ingest_diaries
+
+        # Simulate a legacy state file: only size + entry_count, no content_hash.
+        state_file = _state_file_for(str(palace_dir), diary_dir.resolve())
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(
+            json.dumps(
+                {
+                    f"diary|{diary_file.name}": {
+                        "size": len(text),
+                        "entry_count": 1,
+                        "ingested_at": "2026-04-12T00:00:00+00:00",
+                    }
+                }
+            )
+        )
+
+        # Run with no force — size matches, so this should skip ingest.
+        result = ingest_diaries(str(diary_dir), str(palace_dir))
+        assert result["days_updated"] == 0
+
+        # Hash must have been backfilled into state for the next run's strict check.
+        persisted = json.loads(state_file.read_text())
+        entry = persisted[f"diary|{diary_file.name}"]
+        assert "content_hash" in entry, "legacy skip path must record the hash"
+        assert entry["content_hash"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
     def test_state_file_lives_outside_diary_dir(self, tmp_path):
         # Regression: the original implementation wrote
         # ``.diary_ingest_state.json`` *inside* the user's diary directory,
@@ -623,9 +703,9 @@ class TestDiaryIngest:
 
         # No state file inside the user's diary dir.
         for entry in diary_dir.iterdir():
-            assert (
-                "diary_ingest" not in entry.name
-            ), f"state file leaked into user diary dir: {entry}"
+            assert "diary_ingest" not in entry.name, (
+                f"state file leaked into user diary dir: {entry}"
+            )
 
         # State file does exist under ~/.mempalace/state/.
         state_path = _state_file_for(str(palace_dir), diary_dir.resolve())
@@ -653,14 +733,17 @@ class TestDiaryIngest:
 
         palace_dir = tmp_path / "palace"
 
-        from mempalace.diary_ingest import _diary_drawer_id, ingest_diaries
+        from mempalace.diary_ingest import _diary_drawer_id_entry, ingest_diaries
 
         ingest_diaries(str(personal_dir), str(palace_dir), wing="personal", force=True)
         ingest_diaries(str(work_dir), str(palace_dir), wing="work", force=True)
 
         col = get_collection(str(palace_dir))
-        personal_id = _diary_drawer_id("personal", "2026-04-13")
-        work_id = _diary_drawer_id("work", "2026-04-13")
+        # Post-#1539: per-entry drawers. Each single-entry diary produces
+        # one drawer keyed by (wing, date, entry_idx=0, chunk_idx=0). The
+        # wing component still keeps work vs personal collisions apart.
+        personal_id = _diary_drawer_id_entry("personal", "2026-04-13", 0, 0)
+        work_id = _diary_drawer_id_entry("work", "2026-04-13", 0, 0)
         assert personal_id != work_id
 
         personal = col.get(ids=[personal_id])
@@ -670,27 +753,314 @@ class TestDiaryIngest:
         assert "Personal-only marker." in personal["documents"][0]
         assert "Work-only marker." in work["documents"][0]
 
+    # ── #1539: per-entry drawers, oversized-entry chunking ─────────
+
+    def test_diary_multiple_entries_one_drawer_each(self, tmp_path):
+        """Regression for #1539: each ``##`` entry must become its own
+        drawer rather than the whole file being one document. Pre-fix
+        behaviour: a single file-level drawer for any number of entries.
+        Post-fix: one drawer per entry."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        (diary_dir / "2026-04-13.md").write_text(
+            "# 2026-04-13\n\n"
+            "## 10:00 — first\n\nfirst body content here, well above min size.\n\n"
+            "## 11:00 — second\n\nsecond body content with enough length here.\n\n"
+            "## 12:00 — third\n\nthird body content with sufficient text in it.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        count = get_collection(str(palace_dir)).count()
+        assert count == 3, f"expected one drawer per ## entry (3 entries); got {count} drawers"
+
+    def test_large_diary_with_oversized_entry_chunks_within_entry(self, tmp_path):
+        """Regression for #1539: when a single ``##`` entry exceeds
+        chunk_size, the ingester must chunk that entry into bounded
+        drawers rather than uploading the whole entry as one oversized
+        document (which crashes the embedding model in production)."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        # Middle entry body is 1500 chars — above CHUNK_SIZE=800 but below
+        # the embedding model's hard token limit. This trips the size-cap
+        # assertion on develop without crashing the test infrastructure.
+        big_body = "X" * 1500
+        (diary_dir / "2026-04-13.md").write_text(
+            f"# 2026-04-13\n\n"
+            f"## 10:00 — first\n\nfirst body content here, well above min size.\n\n"
+            f"## 11:00 — big\n\n{big_body}\n\n"
+            f"## 12:00 — last\n\nlast body content with sufficient text in it.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        col = get_collection(str(palace_dir))
+        drawers = col.get()
+        docs = drawers["documents"]
+
+        max_len = max(len(d) for d in docs)
+        assert max_len <= 800, (
+            f"no drawer document may exceed CHUNK_SIZE=800; got max_len={max_len}"
+        )
+        # 3 entries with the middle entry split into >= 2 chunks → >= 4 drawers
+        assert len(docs) >= 4, (
+            f"oversized middle entry must produce multiple drawers; got {len(docs)} total drawers"
+        )
+
+    def test_incremental_appends_new_entry_only(self, tmp_path):
+        """Regression for #1539: incremental ingest must add exactly the
+        delta when one new entry is appended (not re-rewrite all)."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        diary_file = diary_dir / "2026-04-13.md"
+        diary_file.write_text(
+            "# 2026-04-13\n\n"
+            "## 10:00 — first\n\nfirst body content, sufficiently long.\n\n"
+            "## 11:00 — second\n\nsecond body content with text in it.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        initial = get_collection(str(palace_dir)).count()
+        assert initial == 2, f"baseline: 2 entries → 2 drawers; got {initial}"
+
+        diary_file.write_text(
+            diary_file.read_text()
+            + "\n## 12:00 — third\n\nthird body, newly added on second run.\n"
+        )
+        ingest_diaries(str(diary_dir), str(palace_dir))
+        final = get_collection(str(palace_dir)).count()
+        assert final == 3, f"after appending 1 entry: 3 drawers total; got {final}"
+
+    def test_entry_count_watermark_matches_drawer_count(self, tmp_path):
+        """Regression for #1539: persisted ``entry_count`` watermark
+        must equal the number of entries split from the file (and
+        therefore the number of drawers under the new schema)."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        (diary_dir / "2026-04-13.md").write_text(
+            "# 2026-04-13\n\n"
+            "## 10:00 — a\n\nbody one with enough text to count.\n\n"
+            "## 11:00 — b\n\nbody two with enough text to count.\n\n"
+            "## 12:00 — c\n\nbody three with enough text to count.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import _state_file_for, _split_entries, ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+
+        state = json.loads(_state_file_for(str(palace_dir), diary_dir.resolve()).read_text())
+        key = "diary|2026-04-13.md"
+        assert state[key]["entry_count"] == 3, (
+            f"watermark must equal entry count; got {state[key]['entry_count']}"
+        )
+
+        text = (diary_dir / "2026-04-13.md").read_text()
+        assert len(_split_entries(text)) == state[key]["entry_count"]
+
+    def test_diary_chunk_index_is_global_across_entries(self, tmp_path):
+        """Regression for #1539 review: ``chunk_index`` must be a global
+        counter across the file (not per-entry) so the searcher's
+        ``_expand_with_neighbors`` (which queries by source_file +
+        chunk_index range) can stitch sibling chunks regardless of
+        entry boundary. Pre-fix the metadata key was ``entry_chunk_index``
+        and search neighbor expansion silently fell back to the matched
+        drawer alone for any diary hit."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        # 3 entries; middle is oversized (1500 chars > CHUNK_SIZE=800).
+        big_body = "X" * 1500
+        (diary_dir / "2026-04-13.md").write_text(
+            f"# 2026-04-13\n\n"
+            f"## 10:00 — a\n\nfirst body content with enough length here.\n\n"
+            f"## 11:00 — b\n\n{big_body}\n\n"
+            f"## 12:00 — c\n\nthird body content with enough length here.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        col = get_collection(str(palace_dir))
+        all_drawers = col.get()
+
+        indices = sorted(m["chunk_index"] for m in all_drawers["metadatas"])
+        # Global counter: 0, 1, 2, ... contiguous across all entries.
+        assert indices == list(range(len(indices))), (
+            f"chunk_index must be contiguous 0..N-1 globally; got {indices}"
+        )
+        # All chunks have the same source_file (filter target for neighbor
+        # expansion). Verify the searcher-required pair (source_file +
+        # chunk_index) is consistent on every drawer.
+        sources = {m["source_file"] for m in all_drawers["metadatas"]}
+        assert len(sources) == 1, f"all drawers must share one source_file; got {sources}"
+
+    def test_diary_entry_deletion_purges_orphan_drawers(self, tmp_path):
+        """Regression for #1539 review: if a diary shrinks (entries
+        deleted), the full-rebuild step must purge prior-pass drawers
+        for that ``source_file`` before re-writing — otherwise trailing
+        drawers from the longer prior pass remain as orphans and
+        pollute search results forever."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        diary_file = diary_dir / "2026-04-13.md"
+        diary_file.write_text(
+            "# 2026-04-13\n\n"
+            "## 10:00 — first\n\nfirst body content with enough length here.\n\n"
+            "## 11:00 — second\n\nsecond body content with enough length here.\n\n"
+            "## 12:00 — third\n\nthird body content with enough length here.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        col = get_collection(str(palace_dir))
+        assert col.count() == 3, f"baseline: 3 entries → 3 drawers; got {col.count()}"
+
+        # Shrink the file to 1 entry. Hash changes → content_changed=True
+        # → full_rebuild=True → purge step must remove the trailing 2 drawers.
+        diary_file.write_text(
+            "# 2026-04-13\n\n## 10:00 — first\n\nfirst body content with enough length here.\n"
+        )
+        ingest_diaries(str(diary_dir), str(palace_dir))
+        final = col.count()
+        assert final == 1, (
+            f"after shrinking 3 entries → 1 entry: exactly 1 drawer; "
+            f"got {final} (orphans from prior pass not purged)"
+        )
+
+    def test_diary_header_only_entry_produces_drawer(self, tmp_path):
+        """A ``##`` header with no body still produces a drawer carrying
+        the header text. Catches a regression where ``if body`` would
+        collapse the entry."""
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        (diary_dir / "2026-04-13.md").write_text(
+            "# 2026-04-13\n\n"
+            "## 10:00 — note one with sufficient length to pass min size\n\n"
+            "## 11:00 — note two with sufficient length to pass min size\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        from mempalace.diary_ingest import ingest_diaries
+
+        ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+        col = get_collection(str(palace_dir))
+        assert col.count() == 2, (
+            f"expected 2 drawers (one per header-only entry); got {col.count()}"
+        )
+        docs = col.get()["documents"]
+        # Each drawer holds the header line itself.
+        joined = "\n".join(docs)
+        assert "note one" in joined
+        assert "note two" in joined
+
+    def test_diary_atomic_batched_upsert_on_failure(self, tmp_path, monkeypatch):
+        """A mid-pass embedding failure must leave the collection empty
+        rather than half-written. Without batched-atomic upsert, an
+        earlier per-loop upsert would partially commit and the state
+        file would skip the file on re-run, silently losing entries.
+
+        The fixture mixes normal entries with one oversized entry so
+        the failed batch exercises both the single-entry-per-drawer
+        branch and the per-entry character-chunk fallback."""
+        from mempalace import diary_ingest
+
+        diary_dir = tmp_path / "diaries"
+        diary_dir.mkdir()
+        (diary_dir / "2026-05-18.md").write_text(
+            "# 2026-05-18\n\n"
+            "## 10:00 — entry one with sufficient body to clear min size threshold\n"
+            "More body text for entry one with enough length.\n\n"
+            "## 11:00 — entry two with oversized body that forces per-entry chunking\n"
+            + "A"
+            * 3000
+            + "\n\n"
+            "## 12:00 — entry three with body added for adequate test fixture size\n"
+            "More body text for entry three to make it realistic.\n"
+        )
+        palace_dir = tmp_path / "palace"
+
+        class _RaisingCollection:
+            def __init__(self, real):
+                self._real = real
+                self.upsert_call_count = 0
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+            def upsert(self, **kwargs):
+                self.upsert_call_count += 1
+                raise RuntimeError("simulated embedding model failure")
+
+        real_get_collection = diary_ingest.get_collection
+        raising_holder = {}
+
+        def _wrap_get_collection(path):
+            real = real_get_collection(path)
+            wrapped = _RaisingCollection(real)
+            raising_holder["col"] = wrapped
+            return wrapped
+
+        monkeypatch.setattr(diary_ingest, "get_collection", _wrap_get_collection)
+
+        with pytest.raises(RuntimeError, match="simulated embedding model failure"):
+            diary_ingest.ingest_diaries(str(diary_dir), str(palace_dir), force=True)
+
+        # Exactly one batched upsert attempt — not three per-loop calls.
+        # Fixture has a single diary file, so one batch per file == one
+        # total. With a multi-file fixture this would be N batches.
+        assert raising_holder["col"].upsert_call_count == 1, (
+            "diary ingest must accumulate one batch per file; "
+            f"got {raising_holder['col'].upsert_call_count} upsert calls"
+        )
+
+        # Re-open the real collection (untouched by the failed write) and
+        # confirm nothing landed for this source file.
+        real_col = real_get_collection(str(palace_dir))
+        rows = real_col.get(where={"source_file": str(diary_dir / "2026-05-18.md")})
+        assert rows["ids"] == [], (
+            f"failed batched upsert must leave no partial drawers; got {rows['ids']}"
+        )
+
 
 # ── cross-wing tunnels ───────────────────────────────────────────────
 
 
 class TestTunnels:
     """Tunnels are explicit cross-wing connections stored in
-    ``~/.mempalace/tunnels.json``. Each test points the module-level
-    ``_TUNNEL_FILE`` at a fresh tmp file so tests don't cross-contaminate
-    or touch the user's real tunnels."""
+    ``<palace_path_parent>/tunnels.json``. Each test points the resolver at
+    a fresh tmp file so tests don't cross-contaminate or touch the user's
+    real tunnels."""
 
     def setup_method(self):
         import mempalace.palace_graph as pg
 
-        self._orig = pg._TUNNEL_FILE
+        self._pg = pg
+        self._orig_get = pg._get_tunnel_file
+        self._orig_legacy = pg._legacy_tunnel_file
         self._tmpdir = tempfile.mkdtemp()
-        pg._TUNNEL_FILE = os.path.join(self._tmpdir, "tunnels.json")
+        self._tunnel_path = os.path.join(self._tmpdir, "tunnels.json")
+        pg._get_tunnel_file = lambda *a, **kw: self._tunnel_path
+        pg._legacy_tunnel_file = lambda: self._tunnel_path + ".legacy"
+        # Neutralize the endpoint-existence check added for #1468 so these
+        # legacy tests (which predate validation) don't get rejected when
+        # an earlier test module has bound _get_collection to a real backend.
+        self._orig_get_col = pg._get_collection
+        pg._get_collection = lambda *a, **kw: None
 
     def teardown_method(self):
-        import mempalace.palace_graph as pg
-
-        pg._TUNNEL_FILE = self._orig
+        self._pg._get_tunnel_file = self._orig_get
+        self._pg._legacy_tunnel_file = self._orig_legacy
+        self._pg._get_collection = self._orig_get_col
         import shutil
 
         shutil.rmtree(self._tmpdir, ignore_errors=True)
@@ -784,7 +1154,7 @@ class TestTunnels:
         import mempalace.palace_graph as pg
 
         # Simulate a crash that left a truncated file behind.
-        with open(pg._TUNNEL_FILE, "w") as f:
+        with open(pg._get_tunnel_file(), "w") as f:
             f.write("{not valid json")
 
         # Load should return [] rather than raising.
@@ -800,8 +1170,8 @@ class TestTunnels:
         import mempalace.palace_graph as pg
 
         create_tunnel("wing_a", "r1", "wing_b", "r2")
-        assert os.path.exists(pg._TUNNEL_FILE)
-        assert not os.path.exists(pg._TUNNEL_FILE + ".tmp")
+        assert os.path.exists(pg._get_tunnel_file())
+        assert not os.path.exists(pg._get_tunnel_file() + ".tmp")
 
     def test_concurrent_creates_preserve_all_tunnels(self):
         """Regression: two concurrent create_tunnel calls must not clobber
@@ -826,7 +1196,7 @@ class TestTunnels:
         assert not errors, f"worker raised: {errors}"
         tunnels = list_tunnels()
         assert len(tunnels) == 5, (
-            f"expected 5 concurrent tunnels, got {len(tunnels)} — " "write race dropped some"
+            f"expected 5 concurrent tunnels, got {len(tunnels)} — write race dropped some"
         )
 
     def test_created_at_is_timezone_aware(self):
