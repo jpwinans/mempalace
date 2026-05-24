@@ -27,11 +27,19 @@ def _use_tmp_hallway_file(monkeypatch, tmp_path):
 
 
 def _fake_collection(drawers):
-    """Build a MagicMock collection whose .get() returns the given drawer set."""
+    """Build a MagicMock collection whose .get() returns the given drawer set.
+
+    Also mocks ``.count()`` to return the drawer count as an int — the
+    pagination loop in ``compute_hallways_for_wing`` (added 2026-05-23
+    to dodge the SQLite IN(...) variable cap on 66k-drawer wings) does
+    ``while offset < col.count()`` and TypeErrors on a bare MagicMock
+    auto-attribute.
+    """
     col = MagicMock()
     metadatas = [d for d in drawers]
     ids = [f"drawer_{i}" for i in range(len(drawers))]
     col.get.return_value = {"ids": ids, "metadatas": metadatas}
+    col.count.return_value = len(drawers)
     return col
 
 
