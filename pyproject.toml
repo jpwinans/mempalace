@@ -3,7 +3,7 @@ name = "mempalace"
 version = "3.3.5"
 description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = "MIT"
 authors = [
     {name = "milla-jovovich"},
@@ -17,8 +17,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -37,7 +35,7 @@ dependencies = [
     # palace configs to include _type.
     "chromadb>=1.5.4,<1.5.9",
     "pyyaml>=6.0,<7",
-    "tomli>=2.0.0; python_version < '3.11'",
+    # tomli is stdlib (tomllib) on Python 3.11+; floor is now 3.11 so no conditional dep needed.
 ]
 
 [project.urls]
@@ -97,7 +95,7 @@ packages = ["mempalace"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 extend-exclude = ["benchmarks"]
 
 [tool.ruff.lint]
