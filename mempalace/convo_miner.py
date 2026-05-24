@@ -278,11 +278,7 @@ def _emit_chunks(content: str) -> list:
     if is_excluded_content(content):
         return []
     pieces = smart_split(content, CHUNK_SIZE, CHUNK_MAX)
-    return [
-        p
-        for p in pieces
-        if len(p.strip()) >= MIN_CHUNK_SIZE and not is_excluded_content(p)
-    ]
+    return [p for p in pieces if len(p.strip()) >= MIN_CHUNK_SIZE and not is_excluded_content(p)]
 
 
 # =============================================================================
@@ -501,6 +497,7 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
             # provenance returns 0 on any error, never raises.
             try:
                 from mempalace.provenance.mining import mine_chunk_for_provenance
+
                 mine_chunk_for_provenance(
                     collection,
                     chunk_content=chunk["content"],

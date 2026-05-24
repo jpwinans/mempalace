@@ -3230,9 +3230,12 @@ class TestComputeHallways:
             {"id": "hallway_ves_sessions_alice_bob_abc12345", "wing": "ves_sessions"},
             {"id": "hallway_ves_sessions_alice_carol_def67890", "wing": "ves_sessions"},
         ]
-        with _patch("mempalace.mcp_server._get_collection", return_value=fake_col), _patch(
-            "mempalace.hallways.compute_hallways_for_wing", return_value=fake_records
-        ) as mock_compute:
+        with (
+            _patch("mempalace.mcp_server._get_collection", return_value=fake_col),
+            _patch(
+                "mempalace.hallways.compute_hallways_for_wing", return_value=fake_records
+            ) as mock_compute,
+        ):
             result = mcp_server.tool_compute_hallways(wing="ves_sessions")
 
         mock_compute.assert_called_once()
@@ -3256,9 +3259,10 @@ class TestComputeHallways:
 
         _patch_mcp_server(monkeypatch, config, kg)
         fake_col = MagicMock()
-        with _patch("mempalace.mcp_server._get_collection", return_value=fake_col), _patch(
-            "mempalace.hallways.compute_hallways_for_wing", return_value=[]
-        ) as mock_compute:
+        with (
+            _patch("mempalace.mcp_server._get_collection", return_value=fake_col),
+            _patch("mempalace.hallways.compute_hallways_for_wing", return_value=[]) as mock_compute,
+        ):
             mcp_server.tool_compute_hallways(wing="kai_sessions", min_count=5)
         assert mock_compute.call_args.kwargs.get("min_count") == 5
 
@@ -3270,9 +3274,7 @@ class TestListHallways:
 
         _patch_mcp_server(monkeypatch, config, kg)
         fake_records = [{"id": "h1", "wing": "ves_sessions"}]
-        with _patch(
-            "mempalace.hallways.list_hallways", return_value=fake_records
-        ) as mock_list:
+        with _patch("mempalace.hallways.list_hallways", return_value=fake_records) as mock_list:
             result = mcp_server.tool_list_hallways(wing="ves_sessions")
         mock_list.assert_called_once_with(wing="ves_sessions")
         if isinstance(result, list):
@@ -3289,9 +3291,7 @@ class TestListHallways:
             {"id": "h1", "wing": "ves_sessions"},
             {"id": "h2", "wing": "kai_sessions"},
         ]
-        with _patch(
-            "mempalace.hallways.list_hallways", return_value=fake_records
-        ) as mock_list:
+        with _patch("mempalace.hallways.list_hallways", return_value=fake_records) as mock_list:
             result = mcp_server.tool_list_hallways()
         mock_list.assert_called_once_with(wing=None)
         if isinstance(result, list):
@@ -3306,13 +3306,16 @@ class TestComputeEntityTunnels:
         from mempalace import mcp_server
 
         _patch_mcp_server(monkeypatch, config, kg)
-        fake_hallways = [{"id": "h1", "wing": "ves_sessions", "entity_a": "Alice", "entity_b": "Bob"}]
+        fake_hallways = [
+            {"id": "h1", "wing": "ves_sessions", "entity_a": "Alice", "entity_b": "Bob"}
+        ]
         fake_tunnels = [{"id": "tunnel_entity_alice_xyz", "label": "shared entity: Alice"}]
-        with _patch(
-            "mempalace.hallways.list_hallways", return_value=fake_hallways
-        ) as mock_list, _patch(
-            "mempalace.palace_graph.entity_tunnels_for_wing", return_value=fake_tunnels
-        ) as mock_tunnels:
+        with (
+            _patch("mempalace.hallways.list_hallways", return_value=fake_hallways) as mock_list,
+            _patch(
+                "mempalace.palace_graph.entity_tunnels_for_wing", return_value=fake_tunnels
+            ) as mock_tunnels,
+        ):
             result = mcp_server.tool_compute_entity_tunnels(wing="ves_sessions")
 
         mock_list.assert_called_once()
@@ -3376,7 +3379,9 @@ class TestPotentiate:
 
         updated_strength = None
         if isinstance(result, dict):
-            updated_strength = result.get("strength") or result.get("connection", {}).get("strength")
+            updated_strength = result.get("strength") or result.get("connection", {}).get(
+                "strength"
+            )
         assert updated_strength is not None, f"expected strength in {result!r}"
         assert updated_strength > 1.0, (
             f"strength must increment after potentiate; got {updated_strength!r}"
@@ -3389,9 +3394,7 @@ class TestPotentiate:
         assert saved_rec["strength"] > 1.0
         assert saved_rec["access_count"] == 1
 
-    def test_kind_dispatch_hallway_vs_tunnel(
-        self, monkeypatch, tmp_path, config, palace_path, kg
-    ):
+    def test_kind_dispatch_hallway_vs_tunnel(self, monkeypatch, tmp_path, config, palace_path, kg):
         from mempalace import mcp_server
 
         _patch_mcp_server(monkeypatch, config, kg)

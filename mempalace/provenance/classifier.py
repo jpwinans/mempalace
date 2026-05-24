@@ -98,7 +98,8 @@ def _timeout_s() -> float:
     except ValueError:
         logger.warning(
             "provenance.classifier: invalid timeout env %r, using default %s",
-            raw, DEFAULT_TIMEOUT_S,
+            raw,
+            DEFAULT_TIMEOUT_S,
         )
         return DEFAULT_TIMEOUT_S
 
@@ -249,7 +250,8 @@ def qwen3_classifier(context: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         logger.debug(
             "provenance.classifier: inner JSON decode failed: %s — content=%r",
-            exc, content[:200],
+            exc,
+            content[:200],
         )
         return dict(_REJECT)
 

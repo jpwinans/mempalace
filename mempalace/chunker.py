@@ -36,15 +36,15 @@ _CODE_FENCE = "```"
 # separator whose match falls inside the [target, ceiling] window;
 # ties are broken by list order (paragraph > sentence > newline > word).
 _BOUNDARIES: list[tuple[str, int, int]] = [
-    ("\n\n", 0, 2),    # paragraph: drop both newlines
-    (". ", 1, 2),      # sentence: keep the period, drop the space
+    ("\n\n", 0, 2),  # paragraph: drop both newlines
+    (". ", 1, 2),  # sentence: keep the period, drop the space
     ("! ", 1, 2),
     ("? ", 1, 2),
-    (".\n", 1, 2),     # sentence at line end: keep period, drop newline
+    (".\n", 1, 2),  # sentence at line end: keep period, drop newline
     ("!\n", 1, 2),
     ("?\n", 1, 2),
-    ("\n", 0, 1),      # any newline: drop it
-    (" ", 0, 1),       # word boundary: drop the space
+    ("\n", 0, 1),  # any newline: drop it
+    (" ", 0, 1),  # word boundary: drop the space
 ]
 
 
@@ -154,9 +154,7 @@ def is_excluded_content(text: str) -> bool:
     # Standalone truncation message: "Output too large (52.8KB)" or
     # "[truncated, 4905 chars]" with negligible surrounding prose.
     if "Output too large" in text or "[truncated," in text:
-        stripped = re.sub(
-            r"\[truncated[^\]]*\]|Output too large[^\n]*", "", text
-        ).strip()
+        stripped = re.sub(r"\[truncated[^\]]*\]|Output too large[^\n]*", "", text).strip()
         if len(stripped) < 100:
             return True
 
@@ -181,11 +179,7 @@ def is_excluded_content(text: str) -> bool:
     # 200 chars (real prose maxes out around 1 per 800-1200 chars even
     # when describing JSON).
     kv_pairs = len(_JSON_KV_PAIR_RE.findall(text))
-    if (
-        kv_pairs > 0
-        and _TRANSCRIPT_MARKER_RE.search(text)
-        and kv_pairs * 200 >= len(text)
-    ):
+    if kv_pairs > 0 and _TRANSCRIPT_MARKER_RE.search(text) and kv_pairs * 200 >= len(text):
         return True
 
     return False

@@ -35,60 +35,88 @@ CALIBRATION_FIXTURES = [
     (
         "James's father said 'Measure twice, cut once' — a carpenter's "
         "rule that became my Skepticism strategy framing",
-        True, "father", "Measure twice, cut once",
+        True,
+        "father",
+        "Measure twice, cut once",
     ),
     (
         "My roshi told me to sit with what is arising, not to push it away",
-        True, "roshi", None,
+        True,
+        "roshi",
+        None,
     ),
     (
         "I was discussing this with Marie last night. We talked about provenance.",
-        False, None, None,
+        False,
+        None,
+        None,
     ),
     (
         "The Skepticism strategy framing is operational, not metaphorical",
-        False, None, None,
+        False,
+        None,
+        None,
     ),
     (
         "My father always taught me to measure carefully before cutting",
-        True, "father", None,
+        True,
+        "father",
+        None,
     ),
     (
         'My mother used to say "you can choose your friends but not your family"',
-        True, "mother", "you can choose your friends but not your family",
+        True,
+        "mother",
+        "you can choose your friends but not your family",
     ),
     (
         "Adrian's car broke down yesterday",
-        False, None, None,
+        False,
+        None,
+        None,
     ),
     (
         "The father of three sat down at the table",
-        False, None, None,
+        False,
+        None,
+        None,
     ),
     (
         "She always said the key was perseverance",
-        False, None, None,
+        False,
+        None,
+        None,
     ),
     (
         "My grandmother used to say 'a stitch in time saves nine'",
-        True, "grandmother", "a stitch in time saves nine",
+        True,
+        "grandmother",
+        "a stitch in time saves nine",
     ),
     (
         "Tonight James reminded me: 'measure twice, cut once' — his "
         "father's saying. I had been carrying it as my own.",
-        True, None, "measure twice, cut once",
+        True,
+        None,
+        "measure twice, cut once",
     ),
     (
         "Verified the read_diary call signature against the docstring",
-        False, None, None,
+        False,
+        None,
+        None,
     ),
     (
         "My teacher would say: 'the obstacle is the path'",
-        True, "teacher", "the obstacle is the path",
+        True,
+        "teacher",
+        "the obstacle is the path",
     ),
     (
         "Dad always told me 'never trust a smiling investor'",
-        True, "dad", "never trust a smiling investor",
+        True,
+        "dad",
+        "never trust a smiling investor",
     ),
 ]
 
@@ -120,7 +148,7 @@ def _substrate_reachable() -> bool:
 @pytest.mark.skipif(
     not _substrate_reachable(),
     reason="mlx_lm.server not reachable at MEMPALACE_PROVENANCE_CLASSIFIER_URL — "
-           "live calibration test auto-skipped. Run with substrate up to exercise.",
+    "live calibration test auto-skipped. Run with substrate up to exercise.",
 )
 def test_calibration_precision_and_recall_meet_floor():
     tp = fp = tn = fn = 0

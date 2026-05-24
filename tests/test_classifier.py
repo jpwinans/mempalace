@@ -27,6 +27,7 @@ from mempalace.provenance.classifier import (
 # HTTP mocking helpers
 # ---------------------------------------------------------------------------
 
+
 class _FakeResponse:
     """Mimics the urllib.request.urlopen context-manager response."""
 
@@ -72,18 +73,21 @@ def _classifier_json(
 ) -> str:
     """Serialize the inner classifier-output JSON (string the model emits)."""
 
-    return json.dumps({
-        "is_provenance": is_provenance,
-        "person": person,
-        "relation_type": relation_type,
-        "quote": quote,
-        "confidence": confidence,
-    })
+    return json.dumps(
+        {
+            "is_provenance": is_provenance,
+            "person": person,
+            "relation_type": relation_type,
+            "quote": quote,
+            "confidence": confidence,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+
 
 def test_returns_parsed_classifier_dict():
     body = json.dumps(_ok_payload(_classifier_json()))
@@ -118,10 +122,13 @@ def test_handles_bare_backtick_fence():
 
 
 def test_rejection_response_returns_rejection_dict():
-    body = json.dumps(_ok_payload(
-        _classifier_json(is_provenance=False, person=None, relation_type=None,
-                         quote=None, confidence=0.0)
-    ))
+    body = json.dumps(
+        _ok_payload(
+            _classifier_json(
+                is_provenance=False, person=None, relation_type=None, quote=None, confidence=0.0
+            )
+        )
+    )
     with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         result = qwen3_classifier("Operational content with no attribution.")
     assert result["is_provenance"] is False
@@ -155,6 +162,7 @@ def test_request_body_carries_model_and_temperature_zero():
 # Failure-soft paths (per architect envelope §D2.5)
 # ---------------------------------------------------------------------------
 
+
 def test_network_error_returns_rejection_dict():
     def fake_urlopen(req, timeout=None):  # noqa: ARG001
         raise urllib.error.URLError("Connection refused")
@@ -168,8 +176,11 @@ def test_network_error_returns_rejection_dict():
 def test_http_error_returns_rejection_dict():
     def fake_urlopen(req, timeout=None):  # noqa: ARG001
         raise urllib.error.HTTPError(
-            url="http://test/", code=503, msg="Service Unavailable",
-            hdrs=None, fp=io.BytesIO(b""),
+            url="http://test/",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=io.BytesIO(b""),
         )
 
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
@@ -232,31 +243,29 @@ def test_inner_content_not_a_dict_returns_rejection_dict():
 # Confidence coercion
 # ---------------------------------------------------------------------------
 
+
 def test_confidence_string_coerced_to_zero():
-    body = json.dumps(_ok_payload(
-        json.dumps({"is_provenance": True, "person": "father",
-                    "confidence": "high"})
-    ))
+    body = json.dumps(
+        _ok_payload(json.dumps({"is_provenance": True, "person": "father", "confidence": "high"}))
+    )
     with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         result = qwen3_classifier("...")
     assert result["confidence"] == 0.0
 
 
 def test_confidence_above_one_clamped_to_one():
-    body = json.dumps(_ok_payload(
-        json.dumps({"is_provenance": True, "person": "father",
-                    "confidence": 1.5})
-    ))
+    body = json.dumps(
+        _ok_payload(json.dumps({"is_provenance": True, "person": "father", "confidence": 1.5}))
+    )
     with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         result = qwen3_classifier("...")
     assert result["confidence"] == 1.0
 
 
 def test_confidence_below_zero_clamped_to_zero():
-    body = json.dumps(_ok_payload(
-        json.dumps({"is_provenance": True, "person": "father",
-                    "confidence": -0.5})
-    ))
+    body = json.dumps(
+        _ok_payload(json.dumps({"is_provenance": True, "person": "father", "confidence": -0.5}))
+    )
     with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
         result = qwen3_classifier("...")
     assert result["confidence"] == 0.0
@@ -265,6 +274,7 @@ def test_confidence_below_zero_clamped_to_zero():
 # ---------------------------------------------------------------------------
 # Env var overrides
 # ---------------------------------------------------------------------------
+
 
 def test_endpoint_override_via_env(monkeypatch):
     captured: dict[str, Any] = {}

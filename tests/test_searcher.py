@@ -123,8 +123,7 @@ class TestSearchMemories:
         # exc_info=True), so callers that suppress the exception still leave a
         # diagnostic trail naming the failure.
         diagnostic_records = [
-            r for r in caplog.records
-            if r.name == "mempalace_mcp" and r.exc_info is not None
+            r for r in caplog.records if r.name == "mempalace_mcp" and r.exc_info is not None
         ]
         assert len(diagnostic_records) >= 1, (
             "Expected logger.exception() call from search_memories' get_collection "

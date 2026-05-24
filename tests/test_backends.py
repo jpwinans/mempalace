@@ -651,6 +651,8 @@ def test_chroma_backend_client_reconnects_when_db_file_missing(tmp_path):
 
     c2 = backend._client(palace_path)
     assert c2 is not c1, "client should reconnect when the DB file is gone"
+
+
 def test_fix_blob_seq_ids_does_not_touch_max_seq_id(tmp_path):
     """chromadb 1.5.x owns max_seq_id; the shim must not interpret its BLOBs.
 

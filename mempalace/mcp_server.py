@@ -1620,7 +1620,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
     if wing:
         wing = sanitize_name(wing)
     else:
-        wing = agent_name.replace(' ', '_')
+        wing = agent_name.replace(" ", "_")
     room = "diary"
     col = _get_collection(create=True)
     if not col:
@@ -1992,9 +1992,7 @@ def tool_compute_hallways(wing: str, min_count: int = 2):
         return _no_palace()
 
     try:
-        records = hallways.compute_hallways_for_wing(
-            wing, col=col, min_count=int(min_count)
-        )
+        records = hallways.compute_hallways_for_wing(wing, col=col, min_count=int(min_count))
     except Exception as e:
         return {"success": False, "error": str(e)}
     return list(records)
@@ -2055,6 +2053,7 @@ def tool_potentiate(connection_id: str, kind: str = "hallway"):
 
     try:
         from .dynamics import potentiate as _potentiate
+
         if kind == "hallway":
             from .hallways import _load_hallways, _save_hallways
 

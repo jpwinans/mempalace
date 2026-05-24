@@ -55,11 +55,23 @@ logger = logging.getLogger(__name__)
 # tokens ("friend", "colleague") that produce too many false-positives
 # without quote markers. Downstream classifier can expand.
 _FAMILIAL_RELATIONS = (
-    "father", "mother", "wife", "husband", "partner",
-    "brother", "sister", "son", "daughter",
-    "grandfather", "grandmother", "grandpa", "grandma",
-    "dad", "mom",
-    "teacher", "roshi",
+    "father",
+    "mother",
+    "wife",
+    "husband",
+    "partner",
+    "brother",
+    "sister",
+    "son",
+    "daughter",
+    "grandfather",
+    "grandmother",
+    "grandpa",
+    "grandma",
+    "dad",
+    "mom",
+    "teacher",
+    "roshi",
 )
 
 # Attribution verbs that signal someone said something. Order matters
@@ -74,9 +86,7 @@ _ATTRIBUTION_VERBS = (
 # Possessive prefix: either first-person/relative ("my"/"her"/...) or a
 # capitalized name's-possessive ("James's", "Marie's"). The trailing
 # ``'s`` is optional only after capitalized-name forms.
-_POSSESSIVE_PREFIX = (
-    r"(?:my|her|his|their|our|(?:[A-Z]\w+(?:'s|s'|'|s))|James['s']?)"
-)
+_POSSESSIVE_PREFIX = r"(?:my|her|his|their|our|(?:[A-Z]\w+(?:'s|s'|'|s))|James['s']?)"
 
 # Quote delimiters: straight ASCII, curly single, curly double. Aphorisms
 # in transcripts use all three forms.
@@ -90,11 +100,9 @@ _RELATIONS_GROUP = "(" + "|".join(_FAMILIAL_RELATIONS) + ")"
 # Pass 1: <possessive> <relation> [<attribution verb>] <quote>.
 # Highest-signal pattern — produces the most useful candidates.
 _RELATION_ATTRIBUTION_QUOTE_RE = re.compile(
-    r"\b" + _POSSESSIVE_PREFIX + r"\s+"
-    + _RELATIONS_GROUP + r"\b"
+    r"\b" + _POSSESSIVE_PREFIX + r"\s+" + _RELATIONS_GROUP + r"\b"
     r"(?:\s+(?:often\s+|always\s+)?" + _ATTRIBUTION_VERBS + r")?"
-    r"\s*[:,]?\s*"
-    + _QUOTE_OPEN + r"(.+?)" + _QUOTE_CLOSE,
+    r"\s*[:,]?\s*" + _QUOTE_OPEN + r"(.+?)" + _QUOTE_CLOSE,
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -114,9 +122,18 @@ _RELATION_ONLY_RE = re.compile(
 # false-positive rate manageable — "dad" lowercase mid-sentence ("old dad")
 # is filtered out by the classifier rather than the regex.
 _BARE_RELATIONS = (
-    "Dad", "Mom", "Father", "Mother", "Mama", "Papa",
-    "Grandma", "Grandpa", "Grandmother", "Grandfather",
-    "Roshi", "Teacher",
+    "Dad",
+    "Mom",
+    "Father",
+    "Mother",
+    "Mama",
+    "Papa",
+    "Grandma",
+    "Grandpa",
+    "Grandmother",
+    "Grandfather",
+    "Roshi",
+    "Teacher",
 )
 _BARE_RELATIONS_GROUP = "(" + "|".join(_BARE_RELATIONS) + ")"
 _BARE_RELATION_ATTRIBUTION_QUOTE_RE = re.compile(
@@ -151,6 +168,7 @@ as overlapping (Pass-1 already captured the higher-signal candidate)."""
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class ProvenanceCandidate:
@@ -229,6 +247,7 @@ class ProvenanceRecord:
 # Public API: extract_candidates
 # ---------------------------------------------------------------------------
 
+
 def extract_candidates(text: str) -> list[ProvenanceCandidate]:
     """Heuristic-extract provenance candidate spans from ``text``.
 
@@ -300,9 +319,7 @@ def extract_candidates(text: str) -> list[ProvenanceCandidate]:
     # Pass-1 / Pass-2 matches at the same position.
     existing_positions = {c.position for c in candidates}
     for m in _BARE_RELATION_ATTRIBUTION_QUOTE_RE.finditer(text):
-        if any(
-            abs(m.start() - p) < _PASS1_DEDUPE_WINDOW_CHARS for p in existing_positions
-        ):
+        if any(abs(m.start() - p) < _PASS1_DEDUPE_WINDOW_CHARS for p in existing_positions):
             continue
         relation = m.group(1).lower()
         quote = m.group(2).strip() if m.group(2) is not None else None
@@ -423,7 +440,8 @@ def validate_candidate(
 
     if not isinstance(result, dict):
         logger.debug(
-            "provenance: classifier returned non-dict %r — rejecting", type(result),
+            "provenance: classifier returned non-dict %r — rejecting",
+            type(result),
         )
         return None
 

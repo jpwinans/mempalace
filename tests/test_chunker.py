@@ -28,8 +28,7 @@ class TestIsExcludedContent:
 
     def test_logger_format_excluded(self):
         text = "\n".join(
-            f"INFO:vestige.recall:Surfaced memory {i} with priority 0.{i:02d}"
-            for i in range(8)
+            f"INFO:vestige.recall:Surfaced memory {i} with priority 0.{i:02d}" for i in range(8)
         )
         assert is_excluded_content(text) is True
 
@@ -254,10 +253,7 @@ class TestSmartSplit:
 
     def test_no_mid_word_cuts_on_long_prose(self):
         # 3000 chars of prose with sentence boundaries every ~80 chars.
-        sentences = [
-            "This is sentence number {} of the test. ".format(i)
-            for i in range(60)
-        ]
+        sentences = ["This is sentence number {} of the test. ".format(i) for i in range(60)]
         text = "".join(sentences)  # ~3000 chars
 
         chunks = smart_split(text, target=800, ceiling=1200)
@@ -295,9 +291,7 @@ class TestSmartSplit:
         # the same chunk — no orphaned half-blocks
         for c in chunks:
             fence_count = c.count("```")
-            assert fence_count % 2 == 0, (
-                f"Chunk has unbalanced code fences: {c[:200]!r}"
-            )
+            assert fence_count % 2 == 0, f"Chunk has unbalanced code fences: {c[:200]!r}"
 
     def test_no_chunk_exceeds_ceiling_for_normal_prose(self):
         # Pathological prose: long lines, no good boundaries until the very end
@@ -336,7 +330,6 @@ class TestSmartSplit:
 
         chunks = smart_split(text, target=800, ceiling=1200)
         assert len(chunks) >= 2
-        assert _all_chunks_clean_at_starts(chunks), (
-            "Some chunk starts mid-word: "
-            + str([c[:60] for c in chunks])
+        assert _all_chunks_clean_at_starts(chunks), "Some chunk starts mid-word: " + str(
+            [c[:60] for c in chunks]
         )

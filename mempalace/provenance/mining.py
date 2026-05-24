@@ -101,7 +101,9 @@ def _provenance_disabled() -> bool:
     provenance extraction runs unless explicitly disabled."""
 
     return os.environ.get("MEMPALACE_PROVENANCE_DISABLED", "").lower() in (
-        "1", "true", "yes",
+        "1",
+        "true",
+        "yes",
     )
 
 
@@ -121,7 +123,9 @@ def _context_window(text: str, position: int, radius: int = DEFAULT_CONTEXT_RADI
 
 
 def _rewrite_speaker_to_source(
-    person: Optional[str], matched_text: str, context: str,
+    person: Optional[str],
+    matched_text: str,
+    context: str,
 ) -> Optional[str]:
     """Apply the transitive-attribution rewrite.
 
@@ -150,8 +154,10 @@ def _rewrite_speaker_to_source(
             relation = m.group(1).lower()
             if person and person.lower() != relation:
                 logger.debug(
-                    "provenance.mining: transitive-attribution rewrite "
-                    "%r -> %r (matched: %r)", person, relation, m.group(0),
+                    "provenance.mining: transitive-attribution rewrite %r -> %r (matched: %r)",
+                    person,
+                    relation,
+                    m.group(0),
                 )
             return relation
     return person
@@ -166,9 +172,9 @@ def _lineage_drawer_id(person: str, quote: str, source_file: str) -> str:
     — distinct attribution events should be tracked separately.
     """
 
-    digest = hashlib.sha256(
-        f"{person.lower()}|{quote}|{source_file}".encode("utf-8")
-    ).hexdigest()[:24]
+    digest = hashlib.sha256(f"{person.lower()}|{quote}|{source_file}".encode("utf-8")).hexdigest()[
+        :24
+    ]
     person_slug = re.sub(r"[^a-z0-9]+", "_", person.lower()).strip("_") or "unknown"
     return f"drawer_wing_lineage_{person_slug}_{digest}"
 
@@ -265,6 +271,7 @@ def mine_chunk_for_provenance(
     if classifier is None:
         try:
             from .classifier import qwen3_classifier
+
             classifier = qwen3_classifier
             if extractor_label is None:
                 extractor_label = "heuristic_v1+qwen3_classifier_v1"
@@ -286,12 +293,15 @@ def mine_chunk_for_provenance(
         ctx = _context_window(chunk_content, candidate.position)
         try:
             record = validate_candidate(
-                candidate, ctx, classifier=classifier,
+                candidate,
+                ctx,
+                classifier=classifier,
                 extractor_label=extractor_label,
             )
         except Exception:
             logger.debug(
-                "provenance.mining: validate_candidate raised", exc_info=True,
+                "provenance.mining: validate_candidate raised",
+                exc_info=True,
             )
             continue
 
@@ -337,7 +347,8 @@ def mine_chunk_for_provenance(
         except Exception:
             logger.debug(
                 "provenance.mining: upsert failed for drawer_id=%s",
-                drawer_id, exc_info=True,
+                drawer_id,
+                exc_info=True,
             )
 
     return written

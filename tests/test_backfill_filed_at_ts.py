@@ -1,4 +1,5 @@
 """Tests for mempalace.backfill_filed_at_ts."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -52,9 +53,7 @@ def _seed(palace_path: str, rows: list[tuple[int, str, str | None]]) -> None:
 
 def _read_filed_at_ts(palace_path: str) -> dict[int, float | None]:
     db = sqlite3.connect(str(Path(palace_path) / "chroma.sqlite3"))
-    cur = db.execute(
-        "SELECT id, float_value FROM embedding_metadata WHERE key = 'filed_at_ts'"
-    )
+    cur = db.execute("SELECT id, float_value FROM embedding_metadata WHERE key = 'filed_at_ts'")
     out = {row[0]: row[1] for row in cur.fetchall()}
     db.close()
     return out
@@ -64,13 +63,14 @@ def _read_filed_at_ts(palace_path: str) -> dict[int, float | None]:
 # Pure-function tests
 # ---------------------------------------------------------------------------
 
+
 class TestParseIsoToEpoch:
     def test_iso_with_tz(self):
         e = _parse_iso_to_epoch("2026-04-27T12:00:00+00:00")
         assert e is not None
         # Round-trip through datetime to confirm
-        assert datetime.fromtimestamp(e, tz=timezone.utc).isoformat().startswith(
-            "2026-04-27T12:00:00"
+        assert (
+            datetime.fromtimestamp(e, tz=timezone.utc).isoformat().startswith("2026-04-27T12:00:00")
         )
 
     def test_iso_zulu(self):
@@ -97,14 +97,18 @@ class TestParseIsoToEpoch:
 # Backfill end-to-end
 # ---------------------------------------------------------------------------
 
+
 class TestBackfill:
     def test_inserts_filed_at_ts_for_each_filed_at(self, tmp_path):
         palace = _make_test_palace(tmp_path)
-        _seed(palace, [
-            (1, "filed_at", "2026-04-27T12:00:00+00:00"),
-            (2, "filed_at", "2026-04-26T08:30:00+00:00"),
-            (3, "filed_at", "2026-04-25T20:00:00+00:00"),
-        ])
+        _seed(
+            palace,
+            [
+                (1, "filed_at", "2026-04-27T12:00:00+00:00"),
+                (2, "filed_at", "2026-04-26T08:30:00+00:00"),
+                (3, "filed_at", "2026-04-25T20:00:00+00:00"),
+            ],
+        )
         stats = backfill(palace_path=palace, batch_size=10)
         assert stats["scanned"] == 3
         assert stats["inserted"] == 3
@@ -124,15 +128,17 @@ class TestBackfill:
 
     def test_idempotent_skips_existing(self, tmp_path):
         palace = _make_test_palace(tmp_path)
-        _seed(palace, [
-            (1, "filed_at", "2026-04-27T12:00:00+00:00"),
-            (2, "filed_at", "2026-04-26T08:30:00+00:00"),
-        ])
+        _seed(
+            palace,
+            [
+                (1, "filed_at", "2026-04-27T12:00:00+00:00"),
+                (2, "filed_at", "2026-04-26T08:30:00+00:00"),
+            ],
+        )
         # Pre-seed a filed_at_ts for id=1; backfill should leave it alone
         db = sqlite3.connect(str(Path(palace) / "chroma.sqlite3"))
         db.execute(
-            "INSERT INTO embedding_metadata (id, key, float_value) "
-            "VALUES (1, 'filed_at_ts', 999.0)"
+            "INSERT INTO embedding_metadata (id, key, float_value) VALUES (1, 'filed_at_ts', 999.0)"
         )
         db.commit()
         db.close()
@@ -146,11 +152,14 @@ class TestBackfill:
 
     def test_unparseable_filed_at_counted_separately(self, tmp_path):
         palace = _make_test_palace(tmp_path)
-        _seed(palace, [
-            (1, "filed_at", "2026-04-27T12:00:00+00:00"),
-            (2, "filed_at", "garbage"),
-            (3, "filed_at", "2026-04-25T20:00:00+00:00"),
-        ])
+        _seed(
+            palace,
+            [
+                (1, "filed_at", "2026-04-27T12:00:00+00:00"),
+                (2, "filed_at", "garbage"),
+                (3, "filed_at", "2026-04-25T20:00:00+00:00"),
+            ],
+        )
         stats = backfill(palace_path=palace, batch_size=10)
         assert stats["scanned"] == 3
         assert stats["inserted"] == 2  # 1 + 3
@@ -165,10 +174,7 @@ class TestBackfill:
     def test_batch_size_smaller_than_rows(self, tmp_path):
         palace = _make_test_palace(tmp_path)
         # 25 rows, batch_size=10 → should still process all of them
-        rows = [
-            (i, "filed_at", f"2026-04-{i:02d}T00:00:00+00:00")
-            for i in range(1, 26)
-        ]
+        rows = [(i, "filed_at", f"2026-04-{i:02d}T00:00:00+00:00") for i in range(1, 26)]
         _seed(palace, rows)
         stats = backfill(palace_path=palace, batch_size=10)
         assert stats["scanned"] == 25

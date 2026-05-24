@@ -16,6 +16,7 @@ from mempalace.layers import DiaryEntry, DiaryUnavailable, read_diary
 # Fake chromadb collection for tests
 # ---------------------------------------------------------------------------
 
+
 class _FakeCollection:
     """Stand-in for the chromadb collection returned by
     ``mempalace.palace.get_collection`` — just enough surface for
@@ -72,6 +73,7 @@ def _patch_get_collection(monkeypatch, entries):
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+
 
 def test_returns_entries_sorted_by_filed_at_desc(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMPALACE_PALACE_PATH", str(tmp_path))
@@ -169,6 +171,7 @@ def test_last_n_zero_returns_empty(monkeypatch, tmp_path):
 # Failure-soft: DiaryUnavailable on infrastructure problems
 # ---------------------------------------------------------------------------
 
+
 def test_raises_diary_unavailable_when_get_collection_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("MEMPALACE_PALACE_PATH", str(tmp_path))
 
@@ -198,6 +201,7 @@ def test_raises_diary_unavailable_when_query_fails(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # palace_path override
 # ---------------------------------------------------------------------------
+
 
 def test_palace_path_override_used_when_provided(monkeypatch, tmp_path):
     """When palace_path is passed, MempalaceConfig is NOT consulted."""

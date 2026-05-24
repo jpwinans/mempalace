@@ -475,6 +475,8 @@ def test_scan_project_skips_tool_results_subdir():
         )
     finally:
         shutil.rmtree(tmpdir)
+
+
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="symlink creation requires elevated privileges on Windows",

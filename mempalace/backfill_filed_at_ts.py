@@ -21,6 +21,7 @@ Usage:
 The script is idempotent: rows that already have a ``filed_at_ts`` entry
 are skipped.
 """
+
 from __future__ import annotations
 
 import argparse

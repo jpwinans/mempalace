@@ -28,6 +28,7 @@ from mempalace.provenance.mining import (
 # Fake chromadb collection — captures upserts + supports get for dedup
 # ---------------------------------------------------------------------------
 
+
 class _FakeCollection:
     """Just enough chromadb surface for mine_chunk_for_provenance."""
 
@@ -51,6 +52,7 @@ class _FakeCollection:
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+
 
 def _accept_classifier(person: str = "father", confidence: float = 0.92):
     """Build a custom classifier that accepts with the given fields."""
@@ -95,6 +97,7 @@ def test_writes_wing_lineage_drawer_on_accept(monkeypatch):
 # Confidence threshold
 # ---------------------------------------------------------------------------
 
+
 def test_below_threshold_no_drawer(monkeypatch):
     monkeypatch.delenv("MEMPALACE_PROVENANCE_DISABLED", raising=False)
     col = _FakeCollection()
@@ -128,6 +131,7 @@ def test_custom_threshold(monkeypatch):
 # Dedup
 # ---------------------------------------------------------------------------
 
+
 def test_dedup_same_chunk_same_source_twice(monkeypatch):
     """Re-mining the same source file shouldn't produce duplicate
     wing_lineage drawers — the dedupe key is
@@ -137,11 +141,15 @@ def test_dedup_same_chunk_same_source_twice(monkeypatch):
     col = _FakeCollection()
     chunk = "My father said 'measure twice, cut once'"
     written1 = mine_chunk_for_provenance(
-        col, chunk_content=chunk, source_file="/tmp/A.jsonl",
+        col,
+        chunk_content=chunk,
+        source_file="/tmp/A.jsonl",
         classifier=_accept_classifier(),
     )
     written2 = mine_chunk_for_provenance(
-        col, chunk_content=chunk, source_file="/tmp/A.jsonl",
+        col,
+        chunk_content=chunk,
+        source_file="/tmp/A.jsonl",
         classifier=_accept_classifier(),
     )
     assert written1 == 1
@@ -157,11 +165,15 @@ def test_different_sources_produce_distinct_drawers(monkeypatch):
     col = _FakeCollection()
     chunk = "My father said 'measure twice, cut once'"
     mine_chunk_for_provenance(
-        col, chunk_content=chunk, source_file="/tmp/A.jsonl",
+        col,
+        chunk_content=chunk,
+        source_file="/tmp/A.jsonl",
         classifier=_accept_classifier(),
     )
     mine_chunk_for_provenance(
-        col, chunk_content=chunk, source_file="/tmp/B.jsonl",
+        col,
+        chunk_content=chunk,
+        source_file="/tmp/B.jsonl",
         classifier=_accept_classifier(),
     )
     assert len(col.upserts) == 2
@@ -171,6 +183,7 @@ def test_different_sources_produce_distinct_drawers(monkeypatch):
 # ---------------------------------------------------------------------------
 # Disabled mode
 # ---------------------------------------------------------------------------
+
 
 def test_disabled_via_env_returns_zero(monkeypatch):
     monkeypatch.setenv("MEMPALACE_PROVENANCE_DISABLED", "1")
@@ -202,6 +215,7 @@ def test_disabled_via_env_truthy_variants(monkeypatch):
 # No candidates / no extraction
 # ---------------------------------------------------------------------------
 
+
 def test_no_candidates_returns_zero(monkeypatch):
     monkeypatch.delenv("MEMPALACE_PROVENANCE_DISABLED", raising=False)
     col = _FakeCollection()
@@ -218,6 +232,7 @@ def test_no_candidates_returns_zero(monkeypatch):
 # ---------------------------------------------------------------------------
 # Failure-soft on classifier exception
 # ---------------------------------------------------------------------------
+
 
 def test_classifier_exception_yields_zero_no_crash(monkeypatch):
     monkeypatch.delenv("MEMPALACE_PROVENANCE_DISABLED", raising=False)
@@ -239,6 +254,7 @@ def test_classifier_exception_yields_zero_no_crash(monkeypatch):
 # ---------------------------------------------------------------------------
 # Transitive-attribution rewrite
 # ---------------------------------------------------------------------------
+
 
 def test_transitive_attribution_rewrites_speaker_to_source(monkeypatch):
     """Architect-flagged case #11: classifier returns person='James' for
@@ -264,7 +280,9 @@ def test_transitive_attribution_rewrites_speaker_to_source(monkeypatch):
         "— his father's saying. I had been carrying it as my own."
     )
     written = mine_chunk_for_provenance(
-        col, chunk_content=chunk, source_file="/tmp/x.jsonl",
+        col,
+        chunk_content=chunk,
+        source_file="/tmp/x.jsonl",
         classifier=classifier,
     )
     assert written == 1
@@ -279,30 +297,39 @@ def test_transitive_attribution_rewrites_speaker_to_source(monkeypatch):
 def test_rewrite_helper_returns_relation_when_possessive_source_present():
     """Unit test on _rewrite_speaker_to_source directly."""
 
-    assert _rewrite_speaker_to_source(
-        "James", "James reminded me of it",
-        "Tonight James reminded me: 'X' — his father's saying.",
-    ) == "father"
+    assert (
+        _rewrite_speaker_to_source(
+            "James",
+            "James reminded me of it",
+            "Tonight James reminded me: 'X' — his father's saying.",
+        )
+        == "father"
+    )
 
 
 def test_rewrite_helper_returns_input_when_no_possessive_source():
-    assert _rewrite_speaker_to_source(
-        "father", "my father said 'X'", "my father said 'X'",
-    ) == "father"
+    assert (
+        _rewrite_speaker_to_source(
+            "father",
+            "my father said 'X'",
+            "my father said 'X'",
+        )
+        == "father"
+    )
 
 
 def test_rewrite_helper_preserves_none():
-    assert _rewrite_speaker_to_source(
-        None, "some text", "some context"
-    ) is None
+    assert _rewrite_speaker_to_source(None, "some text", "some context") is None
 
 
 # ---------------------------------------------------------------------------
 # convo_miner integration: chunk filing produces both wings
 # ---------------------------------------------------------------------------
 
+
 def test_convo_miner_integration_produces_both_operational_and_lineage_drawers(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
     """End-to-end via convo_miner._file_chunks_locked. Mock the
     classifier (so we don't need substrate) + provide a chunk with
@@ -324,9 +351,7 @@ def test_convo_miner_integration_produces_both_operational_and_lineage_drawers(
             "confidence": 0.9,
         }
 
-    monkeypatch.setattr(
-        "mempalace.provenance.classifier.qwen3_classifier", fake_classifier
-    )
+    monkeypatch.setattr("mempalace.provenance.classifier.qwen3_classifier", fake_classifier)
 
     # Patch mine_lock + file_already_mined since they require a real
     # palace path / state on disk for full integration. We only care
@@ -370,5 +395,8 @@ def test_convo_miner_integration_produces_both_operational_and_lineage_drawers(
 class _NullContext:
     """Stand-in for mine_lock's context-manager interface."""
 
-    def __enter__(self): return self
-    def __exit__(self, *a): return False
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False

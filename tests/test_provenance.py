@@ -26,6 +26,7 @@ from mempalace.provenance import (
 # extract_candidates — Pass 1 (relation + attribution + quote)
 # ---------------------------------------------------------------------------
 
+
 def test_extract_pass1_relation_attribution_quote_straight_quotes():
     text = "James's father said 'Measure twice, cut once'"
     candidates = extract_candidates(text)
@@ -54,7 +55,7 @@ def test_extract_pass1_curly_quotes():
 
 
 def test_extract_pass1_told_me_variant():
-    text = "My teacher told me \"the breath is enough\""
+    text = 'My teacher told me "the breath is enough"'
     candidates = extract_candidates(text)
     assert len(candidates) == 1
     assert candidates[0].person_hint == "teacher"
@@ -77,7 +78,7 @@ def test_extract_pass1_used_to_say_variant():
 
 
 def test_extract_pass1_named_possessive_marie():
-    text = "Marie's brother said \"the work is the practice\""
+    text = 'Marie\'s brother said "the work is the practice"'
     candidates = extract_candidates(text)
     assert len(candidates) == 1
     assert candidates[0].person_hint == "brother"
@@ -87,6 +88,7 @@ def test_extract_pass1_named_possessive_marie():
 # ---------------------------------------------------------------------------
 # extract_candidates — Pass 2 (relation marker alone)
 # ---------------------------------------------------------------------------
+
 
 def test_extract_pass2_roshi_told_no_quote():
     """Architect smoke fixture: "My roshi told me to sit with what is arising"
@@ -124,6 +126,7 @@ def test_extract_pass2_word_boundary_avoids_fatherland():
 # ---------------------------------------------------------------------------
 # extract_candidates — Pass 3 (Capitalized bare-relation as subject)
 # ---------------------------------------------------------------------------
+
 
 def test_extract_pass3_dad_always_told_me():
     """Calibration fixture #14: "Dad always told me 'never trust a
@@ -170,6 +173,7 @@ def test_extract_pass3_requires_capitalization():
 # extract_candidates — Pass-1 deduplication of Pass-2 overlaps
 # ---------------------------------------------------------------------------
 
+
 def test_pass1_match_suppresses_overlapping_pass2():
     """When Pass-1 matches relation+quote, the Pass-2 relation-alone
     match at the same position must not be reported as a duplicate
@@ -185,6 +189,7 @@ def test_pass1_match_suppresses_overlapping_pass2():
 # ---------------------------------------------------------------------------
 # extract_candidates — Negative cases (smoke fixtures)
 # ---------------------------------------------------------------------------
+
 
 def test_extract_marie_without_relation_marker_zero_candidates():
     """Architect smoke fixture: "I was discussing this with Marie last night"
@@ -217,11 +222,9 @@ def test_extract_empty_text_returns_empty_list():
 # extract_candidates — Multi-candidate ordering
 # ---------------------------------------------------------------------------
 
+
 def test_extract_multiple_candidates_sorted_by_position():
-    text = (
-        "My father always said 'measure twice'. "
-        "Later, my roshi told me to be patient."
-    )
+    text = "My father always said 'measure twice'. Later, my roshi told me to be patient."
     candidates = extract_candidates(text)
     assert len(candidates) == 2
     # Sorted by position ascending.
@@ -233,6 +236,7 @@ def test_extract_multiple_candidates_sorted_by_position():
 # ---------------------------------------------------------------------------
 # validate_candidate — stub classifier (D1 default)
 # ---------------------------------------------------------------------------
+
 
 def test_validate_with_stub_accepts_candidate():
     text = "My father said 'measure twice, cut once'"
@@ -261,6 +265,7 @@ def test_validate_stub_handles_candidate_without_quote():
 # ---------------------------------------------------------------------------
 # validate_candidate — custom classifier
 # ---------------------------------------------------------------------------
+
 
 def test_validate_with_custom_classifier_accepts():
     text = "My father said 'be still'"
@@ -330,7 +335,9 @@ def test_validate_classifier_exception_yields_none():
         raise RuntimeError("simulated classifier failure")
 
     record = validate_candidate(
-        candidates[0], ctx=text, classifier=broken_classifier,
+        candidates[0],
+        ctx=text,
+        classifier=broken_classifier,
     )
     assert record is None
 
@@ -342,7 +349,9 @@ def test_validate_classifier_returns_non_dict_yields_none():
     candidates = extract_candidates(text)
 
     record = validate_candidate(
-        candidates[0], ctx=text, classifier=lambda _ctx: "not a dict",  # type: ignore[arg-type]
+        candidates[0],
+        ctx=text,
+        classifier=lambda _ctx: "not a dict",  # type: ignore[arg-type]
     )
     assert record is None
 
@@ -389,6 +398,7 @@ def test_validate_non_float_confidence_defaults_to_zero():
 # Schema doc presence (regression cover)
 # ---------------------------------------------------------------------------
 
+
 def test_wing_lineage_schema_doc_present():
     """Regression cover: the schema doc string must not be accidentally
     deleted. Downstream D3 implementation references it for drawer
@@ -403,6 +413,7 @@ def test_wing_lineage_schema_doc_present():
 # ---------------------------------------------------------------------------
 # End-to-end integration — real-shape diary fixture
 # ---------------------------------------------------------------------------
+
 
 def test_integration_realistic_diary_chunk_yields_validated_record():
     """End-to-end on a sample text shape that real diary drawers produce.
