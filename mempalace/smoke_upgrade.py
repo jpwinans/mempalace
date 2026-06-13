@@ -31,14 +31,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
 from typing import Iterable
-
-from .version import __version__  # noqa: F401  (kept for parity / introspection)
 
 MIN_VERSION = "3.4.0"
 
@@ -99,8 +98,10 @@ _HEALTHCHECK_AGENT = "smoke-healthcheck"
 def _parse_version(v: str) -> list[int]:
     parts: list[int] = []
     for component in str(v).split("."):
-        digits = "".join(ch for ch in component if ch.isdigit())
-        parts.append(int(digits) if digits else 0)
+        # Take only LEADING digits so a pre-release suffix is the base number,
+        # not a misread patch: "3.4.0rc1" -> [3, 4, 0], not [3, 4, 1].
+        m = re.match(r"\d+", component)
+        parts.append(int(m.group()) if m else 0)
     return parts
 
 
@@ -175,14 +176,19 @@ def _mcp_session(
     if env:
         proc_env.update(env)
     payload = "".join(json.dumps(r) + "\n" for r in requests)
-    proc = subprocess.run(
-        server_cmd,
-        input=payload,
-        capture_output=True,
-        text=True,
-        env=proc_env,
-        timeout=timeout,
-    )
+    try:
+        proc = subprocess.run(
+            server_cmd,
+            input=payload,
+            capture_output=True,
+            text=True,
+            env=proc_env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        # A hung server must produce a clean FAIL report (no responses), not
+        # crash the gate — the gate exists to detect a broken server.
+        return {}
     responses: dict = {}
     for line in proc.stdout.splitlines():
         line = line.strip()
