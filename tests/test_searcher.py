@@ -100,21 +100,26 @@ class TestSearchMemories:
         assert "mempalace init" in result.get("hint", "")
 
     def test_search_memories_unexpected_exception_propagates_with_chain(self, caplog):
-        """Non-filesystem errors (e.g. chromadb's KeyError('_type') from a
-        corrupt collection config) propagate to the caller with the original
-        exception type and chained traceback. Diagnostic logging fires via
-        logger.exception so the traceback always lands in mempalace logs even
-        if the caller swallows the exception silently."""
-        original = KeyError("_type")
+        """Genuinely-unexpected errors propagate to the caller with the
+        original exception type and chained traceback. Diagnostic logging
+        fires via logger.exception so the traceback always lands in mempalace
+        logs even if the caller swallows the exception silently.
+
+        NB post-v3.4.0 the pluggable-backend layer claims ``KeyError`` as the
+        *unknown-backend* signal (``_unknown_backend_result``), so a corrupt
+        config now surfaces as a distinct error dict rather than propagating.
+        This test therefore uses an error type outside the recoverable
+        taxonomy (``RuntimeError``) to exercise the catch-all re-raise path."""
+        original = RuntimeError("corrupt collection state")
         with patch(
             "mempalace.searcher.get_collection",
             side_effect=original,
         ):
             with caplog.at_level(logging.ERROR, logger="mempalace_mcp"):
-                with pytest.raises(KeyError) as exc_info:
+                with pytest.raises(RuntimeError) as exc_info:
                     search_memories("anything", "/some/palace")
         # Original exception preserved (same type, same args).
-        assert exc_info.value.args == ("_type",)
+        assert exc_info.value.args == ("corrupt collection state",)
         # Chained context preserved (`__context__` / `__cause__` are the same
         # instance, set by Python's implicit exception chaining when `raise`
         # is used inside an except block).
