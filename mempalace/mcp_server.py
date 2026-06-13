@@ -2832,7 +2832,7 @@ TOOLS = {
                 },
                 "wing": {
                     "type": "string",
-                    "description": "Target wing for this diary entry (optional). If omitted, uses wing_{agent_name}. Use this to write diary entries to a project wing instead of an agent-specific wing.",
+                    "description": "Target wing for this diary entry (optional). If omitted, uses the agent's own name (lower-cased) as the wing. Use this to write diary entries to a project wing instead of an agent-specific wing.",
                 },
                 "content": {
                     "type": "string",
@@ -2864,7 +2864,7 @@ TOOLS = {
                 },
                 "wing": {
                     "type": "string",
-                    "description": "Wing to read diary entries from (optional). If omitted, reads from wing_{agent_name}.",
+                    "description": "Wing to read diary entries from (optional). If omitted, reads diary entries across all wings this agent has written to.",
                 },
             },
             "required": ["agent_name"],

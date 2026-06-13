@@ -406,7 +406,7 @@ def read_diary(
 ) -> list[DiaryEntry]:
     """Return the last ``last_n`` diary entries for ``agent``.
 
-    Reads from ``wing=wing_{agent.lower()} room=diary`` in the palace
+    Reads from ``wing={agent.lower()} room=diary`` in the palace
     (matching the persistence convention used by
     :func:`mempalace.mcp_server.tool_diary_write`), sorts by
     ``filed_at`` descending, and slices to the most recent ``last_n``.
