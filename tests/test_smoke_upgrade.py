@@ -17,9 +17,11 @@ Design guardrails exercised by these tests:
     (MEMPALACE_PALACE_PATH=tmpdir); the configured palace gains no drawer.
 """
 
+import subprocess
+
 import pytest
 
-# RED: this import fails until mempalace/smoke_upgrade.py exists.
+import mempalace.smoke_upgrade as su
 from mempalace.smoke_upgrade import (
     EXPECTED_TOOLS,
     SmokeReport,
@@ -52,6 +54,35 @@ def test_version_meets_two_component_is_padded():
     assert version_meets("3.4", "3.4.0") is True
     # "3.3" is below.
     assert version_meets("3.3", "3.4.0") is False
+
+
+def test_version_parse_prerelease_suffix_is_not_mis_read_as_patch():
+    # Polish note (3): a pre-release like "3.4.0rc1" must parse the base
+    # version, NOT read "0rc1" as patch 1. Leading-digits-per-component.
+    assert su._parse_version("3.4.0rc1") == [3, 4, 0]
+    assert version_meets("3.4.0rc1", "3.4.0") is True  # rc of 3.4.0 satisfies the floor
+    assert version_meets("3.3.0rc5", "3.4.0") is False  # 3.3.x rc is still below
+
+
+def test_mcp_session_timeout_yields_empty_not_crash(monkeypatch):
+    # Polish note (2): a hung server must produce a clean FAIL report, not crash
+    # the gate. _mcp_session catches subprocess.TimeoutExpired and returns {}.
+    def _raise_timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="server", timeout=1)
+
+    monkeypatch.setattr(su.subprocess, "run", _raise_timeout)
+    responses = su._mcp_session([{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}])
+    assert responses == {}  # no responses, no exception
+
+
+def test_run_smoke_reports_fail_when_server_hangs(monkeypatch):
+    def _raise_timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="server", timeout=1)
+
+    monkeypatch.setattr(su.subprocess, "run", _raise_timeout)
+    report = run_smoke(palace_path="/tmp/does-not-matter")
+    assert isinstance(report, SmokeReport)
+    assert report.ok is False  # FAIL, not a crash
 
 
 # ── Pure logic: advertised-tool gate (the staleness catch) ───────────────
