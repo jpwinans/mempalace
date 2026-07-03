@@ -4387,39 +4387,6 @@ class TestComputeHallways:
         assert mock_compute.call_args.kwargs.get("min_count") == 5
 
 
-class TestListHallways:
-    def test_with_wing_filter(self, monkeypatch, config, palace_path, kg):
-        from unittest.mock import patch as _patch
-        from mempalace import mcp_server
-
-        _patch_mcp_server(monkeypatch, config, kg)
-        fake_records = [{"id": "h1", "wing": "ves_sessions"}]
-        with _patch("mempalace.hallways.list_hallways", return_value=fake_records) as mock_list:
-            result = mcp_server.tool_list_hallways(wing="ves_sessions")
-        mock_list.assert_called_once_with(wing="ves_sessions")
-        if isinstance(result, list):
-            assert result == fake_records
-        else:
-            assert result.get("hallways") == fake_records
-
-    def test_without_wing_filter(self, monkeypatch, config, palace_path, kg):
-        from unittest.mock import patch as _patch
-        from mempalace import mcp_server
-
-        _patch_mcp_server(monkeypatch, config, kg)
-        fake_records = [
-            {"id": "h1", "wing": "ves_sessions"},
-            {"id": "h2", "wing": "kai_sessions"},
-        ]
-        with _patch("mempalace.hallways.list_hallways", return_value=fake_records) as mock_list:
-            result = mcp_server.tool_list_hallways()
-        mock_list.assert_called_once_with(wing=None)
-        if isinstance(result, list):
-            assert result == fake_records
-        else:
-            assert result.get("hallways") == fake_records
-
-
 class TestComputeEntityTunnels:
     def test_wraps_entity_tunnels_for_wing(self, monkeypatch, config, palace_path, kg):
         from unittest.mock import patch as _patch
@@ -4459,7 +4426,7 @@ class TestPotentiate:
         from mempalace import hallways
 
         tmp_file = str(tmp_path / "hallways.json")
-        monkeypatch.setattr(hallways, "_HALLWAY_FILE", tmp_file)
+        monkeypatch.setattr(hallways, "_get_hallway_file", lambda config=None: tmp_file)
         # Use the production saver so the file shape matches what
         # _load_hallways expects ({"schema_version", "hallways": [...]} wrapper).
         hallways._save_hallways(records)
@@ -4564,7 +4531,7 @@ class TestApplyDecayPass:
         from mempalace import palace_graph
 
         hall_file = str(tmp_path / "hallways.json")
-        monkeypatch.setattr(hallways_mod, "_HALLWAY_FILE", hall_file)
+        monkeypatch.setattr(hallways_mod, "_get_hallway_file", lambda config=None: hall_file)
         hallways_mod._save_hallways(halls)
 
         tunnel_file = str(tmp_path / "tunnels.json")

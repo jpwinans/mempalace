@@ -12,7 +12,7 @@ upgrade actually took:
   3. ``diary_write`` -> ``diary_read`` round-trips (against a DISPOSABLE sandbox palace)
   4. ``search`` returns without raising
 
-Guardrails (MemPalace v3.4.0 migration envelope, §2):
+Guardrails:
   - version + advertise + search run **read-only** against the configured palace.
   - the diary round-trip writes ONLY to a throwaway sandbox palace
     (``MEMPALACE_PALACE_PATH=tmpdir``), so the configured palace gains no drawer

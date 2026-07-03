@@ -3473,19 +3473,6 @@ def tool_compute_hallways(wing: str, min_count: int = 2):
     return list(records)
 
 
-def tool_list_hallways(wing: str = None):
-    """List hallway records, optionally filtered by wing."""
-    try:
-        from . import hallways
-    except Exception as e:  # pragma: no cover
-        return {"success": False, "error": f"hallways module unavailable: {e}"}
-    try:
-        records = hallways.list_hallways(wing=wing)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-    return list(records)
-
-
 def tool_compute_entity_tunnels(wing: str):
     """Compute entity tunnels for one wing against the current hallway set.
 
@@ -4315,21 +4302,6 @@ TOOLS = {
             "required": ["wing"],
         },
         "handler": tool_compute_hallways,
-    },
-    "mempalace_list_hallways": {
-        "description": (
-            "List hallway records. Optional ``wing`` filter; omit for all hallways across all wings."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "wing": {
-                    "type": "string",
-                    "description": "Filter to this wing only (optional)",
-                },
-            },
-        },
-        "handler": tool_list_hallways,
     },
     "mempalace_compute_entity_tunnels": {
         "description": (
