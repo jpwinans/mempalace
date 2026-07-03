@@ -9,6 +9,7 @@ import os
 import pickle
 import re
 import sqlite3
+import time
 from collections import defaultdict
 from numbers import Integral
 from pathlib import Path
@@ -18,6 +19,8 @@ import chromadb
 from chromadb.api.shared_system_client import SharedSystemClient
 from chromadb.errors import NotFoundError as _ChromaNotFoundError
 
+from ..config import sqlite_read_uri
+from ._sidecar import EMBEDDER_SIDECAR_FILENAME, read_embedder_sidecar, write_embedder_sidecar
 from .base import (
     BaseBackend,
     BaseCollection,
@@ -457,7 +460,7 @@ def _vector_segment_id(palace_path: str, collection_name: str) -> Optional[str]:
     if not os.path.isfile(db_path):
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_read_uri(db_path), uri=True)
         try:
             row = conn.execute(
                 """
@@ -606,6 +609,7 @@ def _hnsw_element_count(palace_path: str, segment_id: str) -> Optional[int]:
 # sync_threshold) from expected steady-state lag.
 _HNSW_DIVERGENCE_FALLBACK_FLOOR = 2000
 _HNSW_DIVERGENCE_FRACTION = 0.10
+_HNSW_PERSISTENT_DIVERGENCE_GRACE_SECONDS = 300.0
 
 
 def _read_sync_threshold(palace_path: str, collection_name: str) -> int:
@@ -626,7 +630,7 @@ def _read_sync_threshold(palace_path: str, collection_name: str) -> int:
     if not os.path.isfile(db_path):
         return 1000
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_read_uri(db_path), uri=True)
         try:
             cur = conn.cursor()
             cur.execute(
@@ -647,6 +651,45 @@ def _read_sync_threshold(palace_path: str, collection_name: str) -> int:
     except Exception:
         logger.debug("_read_sync_threshold failed", exc_info=True)
         return 1000
+
+
+def _collection_has_sync_threshold_metadata(palace_path: str, collection_name: str) -> bool:
+    """Return True when the collection explicitly stores hnsw:sync_threshold."""
+
+    db_path = os.path.join(palace_path, "chroma.sqlite3")
+    if not os.path.isfile(db_path):
+        return False
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                """
+                SELECT 1
+                  FROM collection_metadata cm
+                  JOIN collections c ON cm.collection_id = c.id
+                 WHERE c.name = ?
+                   AND cm.key = 'hnsw:sync_threshold'
+                 LIMIT 1
+                """,
+                (collection_name,),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception:
+        logger.debug("_collection_has_sync_threshold_metadata failed", exc_info=True)
+        return False
+
+
+def _hnsw_metadata_age_seconds(palace_path: str, segment_id: str) -> Optional[float]:
+    """Return index_metadata.pickle age in seconds, or None when unreadable."""
+
+    pickle_path = os.path.join(palace_path, segment_id, "index_metadata.pickle")
+    try:
+        return max(0.0, time.time() - os.path.getmtime(pickle_path))
+    except OSError:
+        return None
 
 
 def hnsw_capacity_status(palace_path: str, collection_name: str = "mempalace_drawers") -> dict:
@@ -693,11 +736,15 @@ def hnsw_capacity_status(palace_path: str, collection_name: str = "mempalace_dra
 
         hnsw_count = _hnsw_element_count(palace_path, seg_id)
         out["hnsw_count"] = hnsw_count
-
         sync_threshold = _read_sync_threshold(palace_path, collection_name)
-        # Two synchronization windows worth — see comment above
-        # _HNSW_DIVERGENCE_FALLBACK_FLOOR for the rationale.
-        divergence_floor = max(_HNSW_DIVERGENCE_FALLBACK_FLOOR, 2 * sync_threshold)
+        has_explicit_sync_threshold = _collection_has_sync_threshold_metadata(
+            palace_path,
+            collection_name,
+        )
+        metadata_age_seconds = (
+            _hnsw_metadata_age_seconds(palace_path, seg_id) if hnsw_count is not None else None
+        )
+        out["hnsw_metadata_age_seconds"] = metadata_age_seconds
 
         if hnsw_count is None:
             # No pickle yet, so this probe cannot measure HNSW capacity.
@@ -715,21 +762,53 @@ def hnsw_capacity_status(palace_path: str, collection_name: str = "mempalace_dra
 
         divergence = sqlite_count - hnsw_count
         out["divergence"] = divergence
-        threshold = max(divergence_floor, int(sqlite_count * _HNSW_DIVERGENCE_FRACTION))
-        if divergence > threshold:
+
+        # Newer palaces explicitly store mempalace's low sync threshold
+        # (currently 2), so a gap of dozens of rows is far beyond ordinary
+        # flush lag. Older palaces may lack the metadata row; keep the
+        # historical floor for fresh lag there, but do not let a stale pickle
+        # sit below the floor forever (#1816).
+        if has_explicit_sync_threshold:
+            threshold = max(0, 2 * sync_threshold)
+        else:
+            divergence_floor = max(_HNSW_DIVERGENCE_FALLBACK_FLOOR, 2 * sync_threshold)
+            threshold = max(
+                divergence_floor,
+                int(sqlite_count * _HNSW_DIVERGENCE_FRACTION),
+            )
+
+        out["threshold"] = threshold
+        stale_below_threshold = (
+            not has_explicit_sync_threshold
+            and divergence > 0
+            and metadata_age_seconds is not None
+            and metadata_age_seconds >= _HNSW_PERSISTENT_DIVERGENCE_GRACE_SECONDS
+        )
+
+        if divergence > threshold or stale_below_threshold:
             out["status"] = "diverged"
             out["diverged"] = True
             pct = 100.0 * divergence / max(sqlite_count, 1)
+            if divergence > threshold:
+                reason = f"exceeds threshold {threshold:,}"
+            else:
+                age = metadata_age_seconds or 0.0
+                reason = f"persisted below the old flush-lag floor for {age:.0f}s"
             out["message"] = (
                 f"HNSW index holds {hnsw_count:,} elements but sqlite has "
-                f"{sqlite_count:,} embeddings — {divergence:,} drawers ({pct:.0f}%) "
-                "are invisible to vector search. Run `mempalace repair` to rebuild."
+                f"{sqlite_count:,} embeddings - {divergence:,} drawers "
+                f"({pct:.0f}%) are missing from the flushed HNSW index "
+                f"({reason}). Vector reads are disabled until "
+                "`mempalace repair` rebuilds it."
             )
         else:
             out["status"] = "ok"
             out["message"] = (
                 f"HNSW {hnsw_count:,} / sqlite {sqlite_count:,} (within flush-lag tolerance)"
             )
+            if divergence < 0:
+                out["message"] += " (HNSW has extra flushed elements; treating as safe)"
+
     except Exception:
         logger.debug("hnsw_capacity_status failed", exc_info=True)
         out["message"] = "HNSW capacity probe raised; skipping"
@@ -746,7 +825,7 @@ def _sqlite_embedding_count(palace_path: str, collection_name: str) -> Optional[
     if not os.path.isfile(db_path):
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_read_uri(db_path), uri=True)
         try:
             row = conn.execute(
                 """
@@ -807,7 +886,7 @@ def _sqlite_wing_room_counts(
     if not os.path.isfile(db_path):
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_read_uri(db_path), uri=True)
         try:
             # Wait out a transient writer/checkpoint lock rather than falling
             # straight back to the expensive vector-index path (#1681).
@@ -926,7 +1005,12 @@ def _missing_dimensionality_appears_recoverable(
         return False
 
     label_count = len(id_to_label)
-    if int(total) != label_count or len(label_to_id) != label_count:
+    # total_elements_added is monotonic across every add, while id_to_label and
+    # label_to_id hold only live elements, so a segment that has had deletions
+    # carries total_elements_added > label_count. Require >= (not ==), otherwise
+    # every post-deletion dim-None segment is wrongly quarantined (#1710); the
+    # label-map size and bijection checks still reject inconsistent label maps.
+    if int(total) < label_count or len(label_to_id) != label_count:
         return False
     try:
         return all(label_to_id.get(label) == item_id for item_id, label in id_to_label.items())
@@ -1068,7 +1152,7 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
     if os.path.isfile(marker):
         return
     try:
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             try:
                 rows = conn.execute(
                     "SELECT rowid, seq_id FROM embeddings WHERE typeof(seq_id) = 'blob'"
@@ -1565,7 +1649,7 @@ class ChromaCollection(BaseCollection):
         # rowid, embedding_id is the user-facing drawer id.
         public_ids: dict[int, str] = {}
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(sqlite_read_uri(db_path), uri=True)
             conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             logger.debug("Chroma lexical sqlite open failed", exc_info=True)
@@ -1724,6 +1808,46 @@ class ChromaCollection(BaseCollection):
         ``.get("hnsw:space")`` without None-checks.
         """
         return self._collection.metadata or {}
+
+    @property
+    def distance_metric(self) -> str:
+        """Report this collection's actual space from ``hnsw:space``.
+
+        MemPalace sets ``hnsw:space=cosine`` on every creation path, so a
+        healthy palace reports ``"cosine"``. When the key is absent, empty, or
+        an unrecognized value, the collection is genuinely using Chroma's HNSW
+        default — **L2** (Euclidean) — because cosine was never set on it. We
+        report ``"l2"`` in that case so core ranking maps the distances
+        correctly; reporting ``"cosine"`` here would reintroduce the
+        floor-every-result-to-zero misranking this property exists to fix.
+        """
+        space = str(self.metadata.get("hnsw:space", "") or "").lower()
+        if space in ("cosine", "l2", "ip"):
+            return space
+        return "l2"
+
+    # ------------------------------------------------------------------
+    # Embedder identity (RFC 001)
+    #
+    # Stored in a small sidecar JSON in the palace dir rather than the Chroma
+    # collection metadata: ``collection.modify(metadata=...)`` replaces the
+    # whole dict and some Chroma versions reject re-passing the immutable
+    # ``hnsw:*`` construction keys, so mutating it on every open is fragile.
+    # The sidecar is keyed by collection name (a palace may hold several).
+    # This is complementary to Chroma's own embedding-function-name check —
+    # the core check runs at open time and yields the clean cross-backend
+    # error before Chroma's read-time rejection fires.
+    # ------------------------------------------------------------------
+    def _embedder_sidecar_path(self) -> Optional[str]:
+        if not self._palace_path:
+            return None
+        return os.path.join(self._palace_path, EMBEDDER_SIDECAR_FILENAME)
+
+    def get_stored_embedder_identity(self):
+        return read_embedder_sidecar(self._embedder_sidecar_path(), self._collection_name())
+
+    def set_embedder_identity(self, identity) -> None:
+        write_embedder_sidecar(self._embedder_sidecar_path(), self._collection_name(), identity)
 
 
 # ---------------------------------------------------------------------------
